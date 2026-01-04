@@ -920,7 +920,7 @@ function Timer({ user, onBack, groupId }) {
         setTime(0);
         setGroupStudyTime(0);
         
-        showNotification("⏱ تم إعادة ضبط المؤقت بنجاح");
+        showNotification(" تم إعادة ضبط المؤقت بنجاح");
       } catch (error) {
         console.error("Error resetting timer:", error);
         showNotification("❌ حدث خطأ أثناء إعادة الضبط");
@@ -1371,9 +1371,9 @@ function Timer({ user, onBack, groupId }) {
               <h2>وقت المذاكرة</h2>
               <div className="time">{formatTime(time)}</div>
               <div className="time-info">
-                <p className="session-info">⏱ وقت هذه المجموعة: {formatTimeDetailed(time)}</p>
-                <p className="session-info">📊 إجمالي وقت الدراسة: {formatTimeDetailed(totalStudyTime)}</p>
-                {isSyncing && <p className="syncing-info">🔄 جاري المزامنة مع السحابة...</p>}
+                <p className="session-info"> وقت هذه المجموعة: {formatTimeDetailed(time)}</p>
+                <p className="session-info"> إجمالي وقت الدراسة: {formatTimeDetailed(totalStudyTime)}</p>
+                {isSyncing && <p className="syncing-info"> جاري المزامنة مع السحابة...</p>}
               </div>
             </div>
             
@@ -1436,7 +1436,7 @@ function Timer({ user, onBack, groupId }) {
                 disabled={isSyncing}
                 title="تحديث البيانات من السحابة"
               >
-                🔄 تحديث
+                 تحديث
               </button>
             </div>
 
@@ -1478,9 +1478,9 @@ function Timer({ user, onBack, groupId }) {
               <p className="user-level">المستوى {currentLevel}</p>
               <div className="sync-status">
                 {isSyncing ? (
-                  <span className="syncing">🔄 جاري المزامنة...</span>
+                  <span className="syncing"> جاري المزامنة...</span>
                 ) : (
-                  <span className="synced">✅ متزامن مع السحابة</span>
+                  <span className="synced"> متزامن مع السحابة</span>
                 )}
               </div>
             </div>
@@ -1541,7 +1541,7 @@ function Timer({ user, onBack, groupId }) {
                 className="refresh-button"
                 disabled={isSyncing}
               >
-                🔄 تحديث البيانات من السحابة
+                 تحديث البيانات من السحابة
               </button>
             </div>
           </div>
