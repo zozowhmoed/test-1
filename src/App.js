@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from 'firebase/auth';
 import { initializeApp } from 'firebase/app';
 import { 
@@ -17,7 +17,8 @@ import {
   runTransaction, 
   arrayUnion,
   writeBatch,
-  increment
+  increment,
+  serverTimestamp
 } from 'firebase/firestore';
 import './App.css';
 import AttendanceCalendar from './components/AttendanceCalendar';
@@ -69,7 +70,7 @@ const userService = {
           photoURL: user.photoURL,
           uniqueCode,
           hasVerifiedCode: false,
-          createdAt: new Date(),
+          createdAt: serverTimestamp(),
           points: 0,
           level: 1,
           totalStudyTime: 0
@@ -105,7 +106,7 @@ const userService = {
       if (userData.uniqueCode === enteredCode) {
         await updateDoc(userRef, {
           hasVerifiedCode: true,
-          codeVerifiedAt: new Date()
+          codeVerifiedAt: serverTimestamp()
         });
         return { success: true, message: "تم التحقق بنجاح" };
       } else {
@@ -123,7 +124,7 @@ const userService = {
       await setDoc(doc(db, "userCodes", userId), {
         code,
         verified: false,
-        createdAt: new Date(),
+        createdAt: serverTimestamp(),
         attempts: 0
       });
       return { code, verified: false };
@@ -202,14 +203,14 @@ const userService = {
           userId,
           groupId,
           totalTime: additionalTime,
-          lastUpdated: new Date(),
-          createdAt: new Date(),
+          lastUpdated: serverTimestamp(),
+          createdAt: serverTimestamp(),
           sessionsCount: 1
         });
       } else {
         await updateDoc(sessionRef, {
           totalTime: increment(additionalTime),
-          lastUpdated: new Date(),
+          lastUpdated: serverTimestamp(),
           sessionsCount: increment(1)
         });
       }
@@ -218,7 +219,7 @@ const userService = {
         userId,
         groupId,
         duration: additionalTime,
-        timestamp: new Date(),
+        timestamp: serverTimestamp(),
         pointsEarned: Math.floor(additionalTime / 30)
       });
       
@@ -259,7 +260,7 @@ const userService = {
         ...doc.data()
       }));
       
-      sessions.sort((a, b) => b.timestamp.toDate() - a.timestamp.toDate());
+      sessions.sort((a, b) => b.timestamp?.toDate() - a.timestamp?.toDate());
       
       return sessions.slice(0, limit);
     } catch (error) {
@@ -273,8 +274,8 @@ const userService = {
       const sessionRef = doc(db, "studySessions", `${userId}_${groupId}`);
       await updateDoc(sessionRef, {
         totalTime: 0,
-        lastUpdated: new Date(),
-        resetAt: new Date()
+        lastUpdated: serverTimestamp(),
+        resetAt: serverTimestamp()
       });
       
       return true;
@@ -305,26 +306,46 @@ const userService = {
           throw new Error("النقاط غير كافية");
         }
         
+        // خصم النقاط من المستخدم
         transaction.update(userRef, {
           points: currentPoints - itemPrice
         });
         
+        // إضافة العنصر للمخزون
         const inventoryData = inventoryDoc.exists() ? inventoryDoc.data() : { items: [] };
         const existingItems = inventoryData.items || [];
         
-        if (!existingItems.some(item => item.id === itemId)) {
+        // التحقق إذا كان العنصر موجود بالفعل
+        const existingItemIndex = existingItems.findIndex(item => item.id === itemId);
+        
+        if (existingItemIndex === -1) {
+          // إضافة عنصر جديد
           const newItem = {
             id: itemId,
-            purchasedAt: new Date(),
+            purchasedAt: serverTimestamp(),
             expiresAt: null,
-            isActive: false
+            isActive: false,
+            quantity: 1
           };
           
           transaction.set(inventoryRef, {
             userId,
             items: [...existingItems, newItem],
-            lastUpdated: new Date()
+            lastUpdated: serverTimestamp()
           }, { merge: true });
+        } else {
+          // زيادة كمية العنصر الموجود
+          const updatedItems = [...existingItems];
+          updatedItems[existingItemIndex] = {
+            ...updatedItems[existingItemIndex],
+            quantity: (updatedItems[existingItemIndex].quantity || 1) + 1,
+            lastUpdated: serverTimestamp()
+          };
+          
+          transaction.update(inventoryRef, {
+            items: updatedItems,
+            lastUpdated: serverTimestamp()
+          });
         }
       });
       
@@ -356,33 +377,47 @@ const userService = {
           throw new Error("العنصر غير موجود في المخزون");
         }
         
+        // التحقق من الكمية
+        if (items[itemIndex].quantity <= 0) {
+          throw new Error("لا توجد كمية كافية من هذا العنصر");
+        }
+        
+        // تخفيض الكمية
         const updatedItems = [...items];
         updatedItems[itemIndex] = {
           ...updatedItems[itemIndex],
+          quantity: (updatedItems[itemIndex].quantity || 1) - 1,
           isActive: true,
-          activatedAt: new Date(),
+          activatedAt: serverTimestamp(),
           expiresAt: new Date(Date.now() + durationMinutes * 60000)
         };
         
+        // إزالة العنصر إذا كانت الكمية صفر
+        if (updatedItems[itemIndex].quantity <= 0) {
+          updatedItems.splice(itemIndex, 1);
+        }
+        
         transaction.update(inventoryRef, {
           items: updatedItems,
-          lastUpdated: new Date()
+          lastUpdated: serverTimestamp()
         });
         
+        // إضافة العنصر للعناصر النشطة
         const activeItemsData = activeItemsDoc.exists() ? activeItemsDoc.data() : { items: [] };
         const activeItems = activeItemsData.items || [];
         
         const newActiveItem = {
           id: itemId,
-          activatedAt: new Date(),
+          activatedAt: serverTimestamp(),
           expiresAt: new Date(Date.now() + durationMinutes * 60000),
-          effectType: getEffectType(itemId)
+          effectType: getEffectType(itemId),
+          userId: userId
         };
         
         transaction.set(activeItemsRef, {
           userId,
           items: [...activeItems.filter(item => item.id !== itemId), newActiveItem],
-          lastUpdated: new Date()
+          lastUpdated: serverTimestamp()
         }, { merge: true });
       });
       
@@ -405,9 +440,10 @@ const userService = {
       const data = activeItemsDoc.data();
       const now = new Date();
       
-      const activeItems = (data.items || []).filter(item => 
-        item.expiresAt?.toDate() > now
-      );
+      const activeItems = (data.items || []).filter(item => {
+        const expiresAt = item.expiresAt?.toDate ? item.expiresAt.toDate() : new Date(item.expiresAt);
+        return expiresAt > now;
+      });
       
       return activeItems;
     } catch (error) {
@@ -434,25 +470,10 @@ const userService = {
 
   deactivateItem: async (userId, itemId) => {
     try {
-      const inventoryRef = doc(db, "userInventory", userId);
       const activeItemsRef = doc(db, "activeItems", userId);
       
       await runTransaction(db, async (transaction) => {
-        const inventoryDoc = await transaction.get(inventoryRef);
         const activeItemsDoc = await transaction.get(activeItemsRef);
-        
-        if (inventoryDoc.exists()) {
-          const inventoryData = inventoryDoc.data();
-          const items = inventoryData.items || [];
-          const updatedItems = items.map(item => 
-            item.id === itemId ? { ...item, isActive: false } : item
-          );
-          
-          transaction.update(inventoryRef, {
-            items: updatedItems,
-            lastUpdated: new Date()
-          });
-        }
         
         if (activeItemsDoc.exists()) {
           const activeItemsData = activeItemsDoc.data();
@@ -461,7 +482,7 @@ const userService = {
           
           transaction.update(activeItemsRef, {
             items: updatedActiveItems,
-            lastUpdated: new Date()
+            lastUpdated: serverTimestamp()
           });
         }
       });
@@ -500,6 +521,18 @@ const userService = {
     }
   },
 
+  subscribeToUserPoints: (userId, callback) => {
+    const userRef = doc(db, "users", userId);
+    return onSnapshot(userRef, (doc) => {
+      if (doc.exists()) {
+        const data = doc.data();
+        callback(data.points || 0);
+      } else {
+        callback(0);
+      }
+    });
+  },
+
   subscribeToInventory: (userId, callback) => {
     const inventoryRef = doc(db, "userInventory", userId);
     return onSnapshot(inventoryRef, (doc) => {
@@ -518,14 +551,29 @@ const userService = {
       if (doc.exists()) {
         const data = doc.data();
         const now = new Date();
-        const activeItems = (data.items || []).filter(item => 
-          item.expiresAt?.toDate() > now
-        );
+        const activeItems = (data.items || []).filter(item => {
+          const expiresAt = item.expiresAt?.toDate ? item.expiresAt.toDate() : new Date(item.expiresAt);
+          return expiresAt > now;
+        });
         callback(activeItems);
       } else {
         callback([]);
       }
     });
+  },
+
+  // دالة جديدة: إضافة نقاط للمستخدم
+  addPointsToUser: async (userId, pointsToAdd) => {
+    try {
+      const userRef = doc(db, "users", userId);
+      await updateDoc(userRef, {
+        points: increment(pointsToAdd)
+      });
+      return { success: true };
+    } catch (error) {
+      console.error("Error adding points to user:", error);
+      return { success: false, message: error.message };
+    }
   }
 };
 
@@ -568,7 +616,7 @@ const examService = {
       const examWithCreator = {
         ...examData,
         creatorId: user.uid,
-        createdAt: new Date(),
+        createdAt: serverTimestamp(),
         status: 'draft'
       };
       
@@ -598,7 +646,7 @@ const examService = {
       
       await updateDoc(examRef, {
         status: 'active',
-        activatedAt: new Date()
+        activatedAt: serverTimestamp()
       });
     } catch (error) {
       console.error("Error activating exam:", error);
@@ -624,7 +672,7 @@ const examService = {
       
       await updateDoc(examRef, {
         status: 'inactive',
-        deactivatedAt: new Date()
+        deactivatedAt: serverTimestamp()
       });
     } catch (error) {
       console.error("Error deactivating exam:", error);
@@ -711,7 +759,7 @@ const examService = {
         ...results,
         userId: user.uid,
         studentName: user.displayName || `User_${user.uid.slice(0, 5)}`,
-        submittedAt: new Date()
+        submittedAt: serverTimestamp()
       };
       
       const docRef = await addDoc(collection(db, "examResults"), resultData);
@@ -754,6 +802,10 @@ function Timer({ user, onBack, groupId }) {
   const [lastSavedTime, setLastSavedTime] = useState(Date.now());
   const [isSyncing, setIsSyncing] = useState(false);
   const [userPoints, setUserPoints] = useState(0);
+  const [groupPoints, setGroupPoints] = useState(0);
+
+  const lastPointsUpdateRef = useRef(0);
+  const timeRef = useRef(0);
 
   const calculateLevel = (points) => {
     const basePoints = 100;
@@ -807,7 +859,7 @@ function Timer({ user, onBack, groupId }) {
     return badges[eligibleLevels[0]] || badges[1];
   };
 
-  const { currentLevel, progress, pointsToNextLevel } = calculateLevel(points);
+  const { currentLevel, progress, pointsToNextLevel } = calculateLevel(groupPoints);
   const currentBadge = getBadge(currentLevel);
 
   const formatTime = (seconds) => {
@@ -902,6 +954,7 @@ function Timer({ user, onBack, groupId }) {
         await updateDoc(doc(db, "studyGroups", groupId), {
           [`userPoints.${user.uid}`]: newPoints
         });
+        setGroupPoints(newPoints);
       }
     } catch (error) {
       console.error("Error updating points:", error);
@@ -918,6 +971,7 @@ function Timer({ user, onBack, groupId }) {
         setBannedMembers(groupData.bannedMembers || []);
         
         const userPoints = groupData.userPoints?.[user.uid] || 0;
+        setGroupPoints(userPoints);
         setPoints(userPoints);
         
         if (groupData.members) {
@@ -946,20 +1000,59 @@ function Timer({ user, onBack, groupId }) {
     }
   };
 
+  const loadUserPoints = async () => {
+    try {
+      const points = await userService.getUserPoints(user.uid);
+      setUserPoints(points);
+    } catch (error) {
+      console.error("Error loading user points:", error);
+    }
+  };
+
+  const loadInventory = async () => {
+    try {
+      const inventoryItems = await userService.getInventory(user.uid);
+      setInventory(inventoryItems);
+    } catch (error) {
+      console.error("Error loading inventory:", error);
+    }
+  };
+
+  const loadActiveItems = async () => {
+    try {
+      const activeItems = await userService.getActiveItems(user.uid);
+      
+      const effects = activeItems.map(item => ({
+        type: item.effectType,
+        expires: item.expiresAt?.toDate ? item.expiresAt.toDate().getTime() : new Date(item.expiresAt).getTime(),
+        itemId: item.id,
+        isFirebase: true
+      }));
+      
+      setActiveEffects(effects);
+      updateLocalEffects(effects);
+    } catch (error) {
+      console.error("Error loading active items:", error);
+    }
+  };
+
   useEffect(() => {
     const loadInitialData = async () => {
       await Promise.all([
         loadTimeFromFirebase(),
-        fetchGroupData()
+        fetchGroupData(),
+        loadUserPoints(),
+        loadInventory(),
+        loadActiveItems()
       ]);
     };
     
     loadInitialData();
     
-    const unsubscribe = onSnapshot(doc(db, "studyGroups", groupId), fetchGroupData);
+    const unsubscribeGroup = onSnapshot(doc(db, "studyGroups", groupId), fetchGroupData);
     
     return () => {
-      unsubscribe();
+      unsubscribeGroup();
       if (isRunning && sessionStartTime) {
         const elapsedTime = Math.floor((Date.now() - sessionStartTime) / 1000);
         if (elapsedTime > 0) {
@@ -970,54 +1063,10 @@ function Timer({ user, onBack, groupId }) {
   }, [groupId, user.uid]);
 
   useEffect(() => {
-    const loadUserPoints = async () => {
-      try {
-        const points = await userService.getUserPoints(user.uid);
-        setUserPoints(points);
-      } catch (error) {
-        console.error("Error loading user points:", error);
-      }
-    };
+    const unsubscribeUserPoints = userService.subscribeToUserPoints(user.uid, (points) => {
+      setUserPoints(points);
+    });
     
-    loadUserPoints();
-  }, [user.uid]);
-
-  useEffect(() => {
-    const loadInventory = async () => {
-      try {
-        const inventoryItems = await userService.getInventory(user.uid);
-        setInventory(inventoryItems);
-      } catch (error) {
-        console.error("Error loading inventory:", error);
-      }
-    };
-    
-    loadInventory();
-  }, [user.uid]);
-
-  useEffect(() => {
-    const loadActiveItems = async () => {
-      try {
-        const activeItems = await userService.getActiveItems(user.uid);
-        
-        const effects = activeItems.map(item => ({
-          type: item.effectType,
-          expires: item.expiresAt?.toDate().getTime() || Date.now(),
-          itemId: item.id,
-          isFirebase: true
-        }));
-        
-        setActiveEffects(effects);
-        updateLocalEffects(effects);
-      } catch (error) {
-        console.error("Error loading active items:", error);
-      }
-    };
-    
-    loadActiveItems();
-  }, [user.uid]);
-
-  useEffect(() => {
     const unsubscribeInventory = userService.subscribeToInventory(user.uid, (items) => {
       setInventory(items);
     });
@@ -1025,7 +1074,7 @@ function Timer({ user, onBack, groupId }) {
     const unsubscribeActiveItems = userService.subscribeToActiveItems(user.uid, (items) => {
       const effects = items.map(item => ({
         type: item.effectType,
-        expires: item.expiresAt?.toDate().getTime() || Date.now(),
+        expires: item.expiresAt?.toDate ? item.expiresAt.toDate().getTime() : new Date(item.expiresAt).getTime(),
         itemId: item.id,
         isFirebase: true
       }));
@@ -1035,6 +1084,7 @@ function Timer({ user, onBack, groupId }) {
     });
     
     return () => {
+      unsubscribeUserPoints();
       unsubscribeInventory();
       unsubscribeActiveItems();
     };
@@ -1056,8 +1106,14 @@ function Timer({ user, onBack, groupId }) {
       interval = setInterval(() => {
         setTime(prev => {
           const newTime = prev + 1;
+          timeRef.current = newTime;
           
-          if (newTime % 30 === 0) {
+          // استخدام timeRef للتحقق بدلاً من newTime مباشرة
+          const secondsSinceLastPoints = newTime - lastPointsUpdateRef.current;
+          
+          if (secondsSinceLastPoints >= 30) {
+            lastPointsUpdateRef.current = newTime;
+            
             let pointsEarned = 1;
             const hasDoublePoints = activeEffects.some(e => e.type === 'double_points');
             const hasSpeedBoost = activeEffects.some(e => e.type === 'speed_boost');
@@ -1065,12 +1121,18 @@ function Timer({ user, onBack, groupId }) {
             if (hasDoublePoints) pointsEarned *= 2;
             if (hasSpeedBoost) pointsEarned = Math.ceil(pointsEarned * 1.5);
             
-            setPoints(prevPoints => {
-              const updatedPoints = prevPoints + pointsEarned;
-              updatePoints(updatedPoints);
-              return updatedPoints;
-            });
-            addStudySession(1, pointsEarned);
+            // تحديث نقاط المجموعة
+            const newGroupPoints = groupPoints + pointsEarned;
+            setGroupPoints(newGroupPoints);
+            setPoints(newGroupPoints);
+            
+            // تحديث نقاط المستخدم (النقاط العامة للمتجر)
+            userService.addPointsToUser(user.uid, pointsEarned).catch(console.error);
+            
+            // تحديث نقاط المجموعة في Firebase
+            updatePoints(newGroupPoints);
+            
+            addStudySession(30, pointsEarned);
           }
           
           if (newTime % 60 === 0 && newTime !== lastUpdateTime) {
@@ -1091,6 +1153,29 @@ function Timer({ user, onBack, groupId }) {
         
         const newTotalTime = totalStudyTime + elapsedTime;
         setTotalStudyTime(newTotalTime);
+        
+        // حساب النقاط المتبقية
+        const completedPeriods = Math.floor(elapsedTime / 30);
+        if (completedPeriods > 0) {
+          let pointsPerPeriod = 1;
+          const hasDoublePoints = activeEffects.some(e => e.type === 'double_points');
+          const hasSpeedBoost = activeEffects.some(e => e.type === 'speed_boost');
+          
+          if (hasDoublePoints) pointsPerPeriod *= 2;
+          if (hasSpeedBoost) pointsPerPeriod = Math.ceil(pointsPerPeriod * 1.5);
+          
+          const totalPointsEarned = completedPeriods * pointsPerPeriod;
+          
+          const newGroupPoints = groupPoints + totalPointsEarned;
+          setGroupPoints(newGroupPoints);
+          setPoints(newGroupPoints);
+          
+          // تحديث نقاط المستخدم (النقاط العامة للمتجر)
+          userService.addPointsToUser(user.uid, totalPointsEarned).catch(console.error);
+          
+          // تحديث نقاط المجموعة في Firebase
+          updatePoints(newGroupPoints);
+        }
         
         saveTimeToFirebase(elapsedTime);
         addStudySession(elapsedTime, 0);
@@ -1127,6 +1212,7 @@ function Timer({ user, onBack, groupId }) {
       } else {
         fetchGroupData();
         loadTimeFromFirebase();
+        loadUserPoints();
       }
     };
     
@@ -1177,6 +1263,7 @@ function Timer({ user, onBack, groupId }) {
     if (window.confirm("هل أنت متأكد من إعادة ضبط المؤقت؟ سيتم إعادة الوقت في هذه المجموعة إلى الصفر.")) {
       setIsRunning(false);
       setSessionStartTime(null);
+      lastPointsUpdateRef.current = 0;
       
       try {
         await userService.resetGroupStudyTime(user.uid, groupId);
@@ -1198,7 +1285,7 @@ function Timer({ user, onBack, groupId }) {
       price: 400, 
       icon: "⚡", 
       effect: "double_points", 
-      color: "var(--warning-color)",
+      color: "#F59E0B",
       bgColor: "rgba(245, 158, 11, 0.1)",
       hoverEffect: "glow"
     },
@@ -1209,8 +1296,8 @@ function Timer({ user, onBack, groupId }) {
       price: 300, 
       icon: "🧠", 
       effect: "speed_boost", 
-      color: "var(--primary-color)",
-      bgColor: "rgba(79, 70, 229, 0.1)",
+      color: "#3B82F6",
+      bgColor: "rgba(59, 130, 246, 0.1)",
       hoverEffect: "pulse"
     },
     { 
@@ -1220,8 +1307,8 @@ function Timer({ user, onBack, groupId }) {
       price: 600, 
       icon: "👑", 
       effect: "golden_crown", 
-      color: "var(--warning-dark)",
-      bgColor: "rgba(217, 119, 6, 0.1)",
+      color: "#F59E0B",
+      bgColor: "rgba(245, 158, 11, 0.1)",
       hoverEffect: "float"
     },
     { 
@@ -1231,7 +1318,7 @@ function Timer({ user, onBack, groupId }) {
       price: 350, 
       icon: "🛡️", 
       effect: "points_shield", 
-      color: "var(--secondary-color)",
+      color: "#10B981",
       bgColor: "rgba(16, 185, 129, 0.1)",
       hoverEffect: "shake"
     }
@@ -1243,19 +1330,7 @@ function Timer({ user, onBack, groupId }) {
         const result = await userService.purchaseItem(user.uid, item.id, item.price);
         
         if (result.success) {
-          setUserPoints(prev => prev - item.price);
-          
-          setInventory(prev => [
-            ...prev,
-            {
-              id: item.id,
-              purchasedAt: new Date(),
-              isActive: false
-            }
-          ]);
-          
-          await activatePurchasedItem(item);
-          
+          // سيتم تحديث userPoints تلقائياً من خلال الاشتراك
           showNotification(`🎉 تم شراء ${item.name}!`);
         } else {
           showNotification(`❌ ${result.message}`);
@@ -1422,7 +1497,7 @@ function Timer({ user, onBack, groupId }) {
             banHistory: arrayUnion({
               memberId: memberId,
               bannedBy: user.uid,
-              timestamp: new Date(),
+              timestamp: serverTimestamp(),
               action: isBanned ? "unban" : "ban"
             })
           };
@@ -1540,7 +1615,8 @@ function Timer({ user, onBack, groupId }) {
                 const shopItem = shopItems.find(i => i.id === item.id);
                 if (!shopItem) return null;
                 
-                const isActive = item.isActive || activeEffects.some(e => e.itemId === item.id);
+                const isActive = activeEffects.some(e => e.itemId === item.id);
+                const quantity = item.quantity || 1;
                 
                 return (
                   <div 
@@ -1556,17 +1632,20 @@ function Timer({ user, onBack, groupId }) {
                     </div>
                     <div className="item-info">
                       <h4>{shopItem.name}</h4>
+                      <p className="item-quantity">الكمية: {quantity}</p>
                       <p className="item-status">
                         {isActive ? '🟢 مفعل' : '⚪ غير مفعل'}
                       </p>
                       {item.purchasedAt && (
                         <p className="purchase-date">
-                          تم الشراء: {new Date(item.purchasedAt).toLocaleDateString('ar-SA')}
+                          تم الشراء: {item.purchasedAt?.toDate ? 
+                            item.purchasedAt.toDate().toLocaleDateString('ar-SA') : 
+                            new Date(item.purchasedAt).toLocaleDateString('ar-SA')}
                         </p>
                       )}
                     </div>
                     <div className="item-actions">
-                      {!isActive ? (
+                      {quantity > 0 && !isActive ? (
                         <button 
                           onClick={() => activateFromInventory(item.id)}
                           className="activate-button"
@@ -1578,8 +1657,9 @@ function Timer({ user, onBack, groupId }) {
                         <button 
                           onClick={() => deactivateItem(item.id)}
                           className="deactivate-button"
+                          disabled={!isActive}
                         >
-                          إلغاء التفعيل
+                          {isActive ? 'إلغاء التفعيل' : 'غير مفعل'}
                         </button>
                       )}
                     </div>
@@ -1594,7 +1674,8 @@ function Timer({ user, onBack, groupId }) {
           <h3>العناصر المتاحة للشراء</h3>
           <div className="shop-items">
             {shopItems.map(item => {
-              const owned = inventory.some(invItem => invItem.id === item.id);
+              const inventoryItem = inventory.find(invItem => invItem.id === item.id);
+              const owned = !!inventoryItem;
               
               return (
                 <div 
@@ -1615,25 +1696,24 @@ function Timer({ user, onBack, groupId }) {
                   <p className="item-price" style={{ color: item.color }}>
                     {item.price} نقطة
                   </p>
-                  {owned ? (
-                    <button className="owned-button" disabled>
-                      مملوك
-                    </button>
-                  ) : (
-                    <button 
-                      onClick={() => purchaseItem(item)}
-                      disabled={userPoints < item.price}
-                      className={userPoints < item.price ? 'disabled' : ''}
-                      style={{ backgroundColor: item.color }}
-                    >
-                      {userPoints < item.price ? 'نقاط غير كافية' : 'شراء'}
-                    </button>
+                  {inventoryItem && (
+                    <p className="owned-count">مملوك ({inventoryItem.quantity || 1})</p>
                   )}
+                  <button 
+                    onClick={() => purchaseItem(item)}
+                    disabled={userPoints < item.price}
+                    className={userPoints < item.price ? 'disabled' : ''}
+                    style={{ backgroundColor: item.color }}
+                  >
+                    {userPoints < item.price ? 'نقاط غير كافية' : 'شراء'}
+                  </button>
                 </div>
               );
             })}
           </div>
         </div>
+
+        {renderActiveEffects()}
       </div>
     );
   };
@@ -1852,8 +1932,13 @@ function Timer({ user, onBack, groupId }) {
             
             <div className="stats-display">
               <div className="stat-box">
-                <span className="stat-label">النقاط</span>
-                <span className="stat-value">{points}</span>
+                <span className="stat-label">النقاط في المجموعة</span>
+                <span className="stat-value">{groupPoints}</span>
+              </div>
+              
+              <div className="stat-box">
+                <span className="stat-label">نقاط المتجر</span>
+                <span className="stat-value">{userPoints}</span>
               </div>
               
               <div className="stat-box">
@@ -1938,8 +2023,13 @@ function Timer({ user, onBack, groupId }) {
             
             <div className="profile-stats">
               <div className="stat-row">
-                <span className="stat-label">إجمالي النقاط:</span>
-                <span className="stat-value">{points}</span>
+                <span className="stat-label">نقاط المجموعة:</span>
+                <span className="stat-value">{groupPoints}</span>
+              </div>
+              
+              <div className="stat-row">
+                <span className="stat-label">نقاط المتجر:</span>
+                <span className="stat-value">{userPoints}</span>
               </div>
               
               <div className="stat-row">
@@ -1965,14 +2055,24 @@ function Timer({ user, onBack, groupId }) {
                   {studySessions.map((session, index) => (
                     <div key={index} className="session-item">
                       <span className="session-date">
-                        {new Date(session.date || session.timestamp?.toDate()).toLocaleDateString('ar-SA', {
-                          weekday: 'short',
-                          year: 'numeric',
-                          month: 'short',
-                          day: 'numeric',
-                          hour: '2-digit',
-                          minute: '2-digit'
-                        })}
+                        {session.timestamp?.toDate ? 
+                          session.timestamp.toDate().toLocaleDateString('ar-SA', {
+                            weekday: 'short',
+                            year: 'numeric',
+                            month: 'short',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          }) : 
+                          new Date(session.date).toLocaleDateString('ar-SA', {
+                            weekday: 'short',
+                            year: 'numeric',
+                            month: 'short',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          })
+                        }
                       </span>
                       <span className="session-duration">
                         {formatTimeDetailed(session.duration)}
@@ -1988,7 +2088,10 @@ function Timer({ user, onBack, groupId }) {
             
             <div className="profile-actions">
               <button 
-                onClick={() => loadTimeFromFirebase()} 
+                onClick={() => {
+                  loadTimeFromFirebase();
+                  loadUserPoints();
+                }} 
                 className="refresh-button"
                 disabled={isSyncing}
               >
@@ -2068,7 +2171,7 @@ function Timer({ user, onBack, groupId }) {
         )}
 
         {activeTab === 'progress' && (
-          <ArrowChartPage points={points} />
+          <ArrowChartPage points={groupPoints} />
         )}
       </div>
 
@@ -2352,7 +2455,7 @@ function App() {
     try {
       const newGroup = {
         name: groupName.trim(),
-        createdAt: new Date(),
+        createdAt: serverTimestamp(),
         creator: user.uid,
         members: [user.uid],
         userPoints: { [user.uid]: 0 },
