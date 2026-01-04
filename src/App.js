@@ -55,7 +55,6 @@ const generateUniqueCode = () => {
 
 // خدمة إدارة وقت الدراسة الدائم
 const studyTimeService = {
-  // بدء جلسة دراسة جديدة
   startStudySession: async (userId, groupId) => {
     try {
       const sessionId = `${userId}_${groupId}_${Date.now()}`;
@@ -77,7 +76,6 @@ const studyTimeService = {
     }
   },
 
-  // إنهاء جلسة الدراسة وحفظ الوقت
   endStudySession: async (sessionId, durationSeconds, pointsEarned) => {
     try {
       const sessionRef = doc(db, "studySessions", sessionId);
@@ -97,10 +95,8 @@ const studyTimeService = {
         updatedAt: new Date()
       });
 
-      // تحديث إجمالي وقت الدراسة للمستخدم
       const userRef = doc(db, "users", sessionData.userId);
       
-      // استخدام runTransaction للتأكد من دقة البيانات
       await runTransaction(db, async (transaction) => {
         const userDoc = await transaction.get(userRef);
         
@@ -117,7 +113,6 @@ const studyTimeService = {
           points: increment(pointsEarned)
         });
         
-        // تحديث النقاط في المجموعة أيضًا
         const groupRef = doc(db, "studyGroups", sessionData.groupId);
         const groupDoc = await transaction.get(groupRef);
         
@@ -136,7 +131,6 @@ const studyTimeService = {
     }
   },
 
-  // جلب إجمالي وقت الدراسة للمستخدم
   getUserTotalStudyTime: async (userId) => {
     try {
       const userRef = doc(db, "users", userId);
@@ -153,7 +147,6 @@ const studyTimeService = {
     }
   },
 
-  // جلب جلسات الدراسة الأخيرة
   getUserRecentSessions: async (userId, limit = 10) => {
     try {
       const q = query(
@@ -183,7 +176,6 @@ const studyTimeService = {
     }
   },
 
-  // جلب الجلسة النشطة الحالية
   getActiveSession: async (userId, groupId) => {
     try {
       const q = query(
@@ -210,7 +202,6 @@ const studyTimeService = {
     }
   },
 
-  // استئناف جلسة دراسة موجودة
   resumeStudySession: async (sessionId, currentDuration) => {
     try {
       const sessionRef = doc(db, "studySessions", sessionId);
@@ -225,7 +216,6 @@ const studyTimeService = {
     }
   },
 
-  // تحديث الوقت أثناء الجلسة النشطة
   updateActiveSession: async (sessionId, currentDuration) => {
     try {
       const sessionRef = doc(db, "studySessions", sessionId);
@@ -238,7 +228,6 @@ const studyTimeService = {
     }
   },
 
-  // جلب إحصائيات الدراسة للمستخدم
   getUserStudyStats: async (userId) => {
     try {
       const q = query(
@@ -298,7 +287,6 @@ const userService = {
       const userSnap = await getDoc(userRef);
       
       if (!userSnap.exists()) {
-        // إنشاء مستخدم جديد مع كود مميز
         const uniqueCode = generateUniqueCode();
         await setDoc(userRef, {
           uid: user.uid,
@@ -310,16 +298,14 @@ const userService = {
           createdAt: new Date(),
           points: 0,
           level: 1,
-          totalStudyTime: 0, // حقل جديد لإجمالي وقت الدراسة
+          totalStudyTime: 0,
           lastStudySession: null,
           studySessionsCount: 0
         });
         return { uniqueCode, hasVerifiedCode: false };
       } else {
-        // المستخدم موجود بالفعل، التأكد من وجود الحقول الجديدة
         const userData = userSnap.data();
         
-        // تحديث المستخدم إذا كانت الحقول الجديدة مفقودة
         const updates = {};
         if (userData.totalStudyTime === undefined) {
           updates.totalStudyTime = userData.totalStudyTime || 0;
@@ -410,14 +396,12 @@ const userService = {
           verifiedAt: new Date()
         });
         
-        // تحديث حالة التحقق في مستند المستخدم
         await updateDoc(doc(db, "users", userId), {
           hasVerifiedCode: true
         });
         
         return { verified: true, message: "تم التحقق بنجاح" };
       } else {
-        // زيادة عدد المحاولات
         await updateDoc(codeRef, {
           attempts: codeData.attempts + 1
         });
@@ -462,7 +446,6 @@ const userService = {
     }
   },
 
-  // دالة جديدة لتحميل بيانات دراسة المستخدم
   loadUserStudyData: async (userId) => {
     try {
       const userRef = doc(db, "users", userId);
@@ -474,7 +457,6 @@ const userService = {
       
       const userData = userSnap.data();
       
-      // جلب جلسات الدراسة
       const sessions = await studyTimeService.getUserRecentSessions(userId, 10);
       const stats = await studyTimeService.getUserStudyStats(userId);
       
@@ -676,8 +658,8 @@ const examService = {
 
 function Timer({ user, onBack, groupId }) {
   const [isRunning, setIsRunning] = useState(false);
-  const [sessionTime, setSessionTime] = useState(0); // وقت الجلسة الحالية
-  const [totalStudyTime, setTotalStudyTime] = useState(0); // إجمالي وقت الدراسة الدائم
+  const [sessionTime, setSessionTime] = useState(0);
+  const [totalStudyTime, setTotalStudyTime] = useState(0);
   const [points, setPoints] = useState(0);
   const [lastUpdateTime, setLastUpdateTime] = useState(0);
   const [members, setMembers] = useState([]);
@@ -709,7 +691,6 @@ function Timer({ user, onBack, groupId }) {
     averageDuration: 0
   });
 
-  // نظام المستويات المعدل
   const calculateLevel = (points) => {
     const basePoints = 100;
     const growthFactor = 1.2;
@@ -743,7 +724,6 @@ function Timer({ user, onBack, groupId }) {
     };
   };
 
-  // نظام الشارات المعدل
   const getBadge = (level) => {
     const badges = {
       1: { name: "المبتدئ", icon: "🌱", color: "#10B981", bgColor: "rgba(16, 185, 129, 0.1)" },
@@ -856,7 +836,6 @@ function Timer({ user, onBack, groupId }) {
     }
   };
 
-  // تنسيق الوقت بالساعات والدقائق والثواني
   const formatTimeDetailed = (seconds) => {
     const hrs = Math.floor(seconds / 3600);
     const mins = Math.floor((seconds % 3600) / 60);
@@ -870,7 +849,6 @@ function Timer({ user, onBack, groupId }) {
     return result.trim();
   };
 
-  // تنسيق الوقت للتسلسل (HH:MM:SS)
   const formatTime = (seconds) => {
     const hrs = Math.floor(seconds / 3600);
     const mins = Math.floor((seconds % 3600) / 60);
@@ -898,30 +876,24 @@ function Timer({ user, onBack, groupId }) {
     showNotification(lang === 'ar' ? '🇸🇦 تم تغيير اللغة إلى العربية' : '🇬🇧 Language changed to English');
   };
 
-  // تحميل بيانات وقت الدراسة عند بدء التطبيق
   useEffect(() => {
     const loadStudyData = async () => {
       setIsLoadingTime(true);
       try {
-        // تحميل إجمالي وقت الدراسة
         const totalTime = await studyTimeService.getUserTotalStudyTime(user.uid);
         setTotalStudyTime(totalTime);
         
-        // تحميل جلسات الدراسة الأخيرة
         const recentSessions = await studyTimeService.getUserRecentSessions(user.uid, 10);
         setStudySessions(recentSessions);
         
-        // تحميل إحصائيات الدراسة
         const stats = await studyTimeService.getUserStudyStats(user.uid);
         setStudyStats(stats);
         
-        // التحقق من وجود جلسة نشطة
         const activeSession = await studyTimeService.getActiveSession(user.uid, groupId);
         if (activeSession) {
           setCurrentSessionId(activeSession.id);
           setSessionTime(activeSession.duration || 0);
           setIsRunning(true);
-          showNotification("تم استئناف جلسة الدراسة السابقة");
         }
       } catch (error) {
         console.error("Error loading study data:", error);
@@ -935,54 +907,45 @@ function Timer({ user, onBack, groupId }) {
     }
   }, [user, groupId]);
 
-  // بدء جلسة دراسة جديدة
   const startNewSession = async () => {
     try {
       const sessionId = await studyTimeService.startStudySession(user.uid, groupId);
       setCurrentSessionId(sessionId);
       setIsRunning(true);
       setSessionTime(0);
-      showNotification("تم بدء جلسة الدراسة الجديدة");
     } catch (error) {
       console.error("Error starting session:", error);
       showNotification("حدث خطأ في بدء الجلسة");
     }
   };
 
-  // إيقاف جلسة الدراسة وحفظ الوقت
   const stopAndSaveSession = async () => {
     if (!currentSessionId || sessionTime === 0) return;
     
     try {
-      const pointsEarned = Math.floor(sessionTime / 30); // نقطة كل 30 ثانية
+      const pointsEarned = Math.floor(sessionTime / 30);
       await studyTimeService.endStudySession(currentSessionId, sessionTime, pointsEarned);
       
-      // تحديث الإجمالي محليًا
       const newTotal = totalStudyTime + sessionTime;
       setTotalStudyTime(newTotal);
       
-      // تحديث النقاط
       const newPoints = points + pointsEarned;
       setPoints(newPoints);
       
-      // تحديث جلسات الدراسة
       const recentSessions = await studyTimeService.getUserRecentSessions(user.uid, 10);
       setStudySessions(recentSessions);
       
-      // تحديث الإحصائيات
       const stats = await studyTimeService.getUserStudyStats(user.uid);
       setStudyStats(stats);
       
       setIsRunning(false);
       setCurrentSessionId(null);
-      showNotification(`تم حفظ ${formatTimeDetailed(sessionTime)} من الدراسة (+${pointsEarned} نقطة)`);
     } catch (error) {
       console.error("Error stopping session:", error);
       showNotification("حدث خطأ في حفظ الجلسة");
     }
   };
 
-  // تحديث وقت الجلسة النشطة كل ثانية
   useEffect(() => {
     let interval;
     
@@ -991,7 +954,6 @@ function Timer({ user, onBack, groupId }) {
         setSessionTime(prev => {
           const newTime = prev + 1;
           
-          // تحديث الوقت في Firebase كل 30 ثانية
           if (newTime % 30 === 0) {
             studyTimeService.updateActiveSession(currentSessionId, newTime);
           }
@@ -1004,7 +966,6 @@ function Timer({ user, onBack, groupId }) {
     return () => clearInterval(interval);
   }, [isRunning, currentSessionId]);
 
-  // تحديث النقاط كل 30 ثانية من وقت الدراسة
   useEffect(() => {
     if (isRunning && sessionTime > 0 && sessionTime % 30 === 0 && sessionTime !== lastUpdateTime) {
       const pointsEarned = activeEffects.some(e => e.type === 'double_points') ? 2 : 1;
@@ -1153,20 +1114,17 @@ function Timer({ user, onBack, groupId }) {
     }
   };
 
-  // إعادة ضبط المؤقت مع الحفاظ على البيانات المحفوظة
   const resetTimer = async () => {
     if (isRunning && currentSessionId) {
       if (window.confirm("هل تريد إيقاف وحفظ الجلسة الحالية قبل الإعادة؟")) {
         await stopAndSaveSession();
       } else {
-        // إلغاء الجلسة بدون حفظ
         setIsRunning(false);
         setCurrentSessionId(null);
       }
     }
     
     setSessionTime(0);
-    showNotification("تم إعادة ضبط المؤقت");
   };
 
   const toggleMembersSidebar = () => {
@@ -1273,7 +1231,6 @@ function Timer({ user, onBack, groupId }) {
     return score;
   };
 
-  // التحكم في المؤقت
   const toggleTimer = async () => {
     if (isRunning) {
       await stopAndSaveSession();
@@ -1457,13 +1414,12 @@ function Timer({ user, onBack, groupId }) {
             ) : (
               <>
                 <div className="time-display">
-                  <h2>وقت المذاكرة الحالي</h2>
+                  <h2>وقت المذاكرة</h2>
                   <div className="time">{formatTime(sessionTime)}</div>
                   <div className="total-time-display">
                     <span className="total-time-label">إجمالي وقت الدراسة:</span>
-                    <span className="total-time-value">{formatTimeDetailed(totalStudyTime)}</span
-         
-                  )}
+                    <span className="total-time-value">{formatTimeDetailed(totalStudyTime)}</span>
+                  </div>
                 </div>
                 
                 <div className="stats-display">
@@ -1505,14 +1461,14 @@ function Timer({ user, onBack, groupId }) {
                     className={`control-button ${isRunning ? 'pause-button' : 'start-button'}`}
                     disabled={bannedMembers.includes(user.uid)}
                   >
-                    {isRunning ? '⏸️ إيقاف وحفظ' : '▶️ بدء جلسة جديدة'}
+                    {isRunning ? '⏸️ إيقاف' : '▶️ بدء'}
                   </button>
                   
                   <button 
                     onClick={resetTimer}
                     className="control-button reset-button"
                   >
-                    🔄 إعادة تعيين المؤقت
+                    🔄 إعادة تعيين
                   </button>
                   
                   <button
@@ -1546,11 +1502,6 @@ function Timer({ user, onBack, groupId }) {
                     </div>
                   </div>
                 )}
-
-                <div className="time-saving-info">
-                  <p></p>
-                 
-                </div>
               </>
             )}
           </div>
@@ -1666,21 +1617,11 @@ function Timer({ user, onBack, groupId }) {
                           ⭐ +{session.pointsEarned || 0} نقطة
                         </span>
                       </div>
-                      {session.groupId && (
-                        <div className="session-group">
-                          <span className="group-label">المجموعة:</span>
-                          <span className="group-id">{session.groupId.slice(0, 8)}...</span>
-                        </div>
-                      )}
                     </div>
                   ))}
                 </div>
               </div>
             )}
-            
-            <div className="data-backup-info">
-              <h4></h4>
-            </div>
           </div>
         )}
         
@@ -2062,7 +2003,6 @@ function App() {
           studyStats: fullUserData?.studyStats
         });
         
-        // إنشاء كود التحقق للمستخدم
         const codeResult = await userService.createUserCode(result.user.uid);
         console.log('User code:', codeResult.code);
         
@@ -2499,7 +2439,6 @@ function App() {
 
               <footer className="app-footer">
                 <p>تم تطويره بواسطة محمد أبو طبيخ © {new Date().getFullYear()}</p>
-                <p className="firebase-info">ⓘ يتم حفظ جميع بيانات وقت الدراسة تلقائيًا في Firebase</p>
               </footer>
             </header>
           </>
