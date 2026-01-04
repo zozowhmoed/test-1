@@ -331,10 +331,9 @@ body {
   display: grid;
   grid-template-areas:
     "top-tabs"
-    "main-content"
-    "members-sidebar";
+    "main-content";
   grid-template-columns: 1fr;
-  grid-template-rows: auto 1fr auto;
+  grid-template-rows: auto 1fr;
   min-height: 100vh;
   position: relative;
   animation: fadeIn 0.8s ease-out;
@@ -1495,22 +1494,19 @@ input:checked + .slider::before {
 
 /* ========== شريط الأعضاء الجانبي ========== */
 .members-sidebar {
-  grid-area: members-sidebar;
-  background: var(--card-bg);
-  border-radius: var(--radius-xl);
-  padding: 1.5rem;
-  box-shadow: var(--shadow-lg);
-  border: 1px solid var(--border-color);
   position: fixed;
-  right: -100%;
   top: 0;
-  bottom: 0;
+  right: -100%;
   width: 350px;
+  height: 100vh;
+  background: var(--card-bg);
+  box-shadow: var(--shadow-xl);
   z-index: 1500;
   transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
   overflow-y: auto;
   display: flex;
   flex-direction: column;
+  border-left: 1px solid var(--border-color);
 }
 
 .members-sidebar.show {
@@ -1521,43 +1517,41 @@ input:checked + .slider::before {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 1.5rem;
-  padding-bottom: 1rem;
+  padding: 1.5rem;
   border-bottom: 1px solid var(--border-color);
+  background: var(--primary-color);
+  color: white;
 }
 
 .sidebar-header h3 {
   font-size: 1.25rem;
-  color: var(--text-primary);
   font-weight: 600;
 }
 
 .close-sidebar {
-  display: flex;
-  align-items: center;
-  justify-content: center;
   width: 2rem;
   height: 2rem;
   border-radius: var(--radius-full);
-  background: var(--secondary-bg);
-  border: 1px solid var(--border-color);
-  color: var(--text-secondary);
-  font-size: 1rem;
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+  border: none;
+  font-size: 1.25rem;
   cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   transition: all var(--transition-fast);
 }
 
 .close-sidebar:hover {
-  background: var(--accent-color);
-  color: white;
-  border-color: var(--accent-color);
+  background: rgba(255, 255, 255, 0.3);
   transform: rotate(90deg);
 }
 
 .leaderboard {
   flex: 1;
   overflow-y: auto;
-  margin-bottom: 1rem;
+  padding: 1.5rem;
 }
 
 .member-item {
@@ -1565,9 +1559,9 @@ input:checked + .slider::before {
   align-items: center;
   gap: 1rem;
   padding: 1rem;
-  margin-bottom: 0.5rem;
-  border-radius: var(--radius-lg);
+  margin-bottom: 0.75rem;
   background: var(--secondary-bg);
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border-color);
   transition: all var(--transition-base);
   position: relative;
@@ -1589,7 +1583,7 @@ input:checked + .slider::before {
 }
 
 .member-item:hover {
-  transform: translateX(5px) scale(1.02);
+  transform: translateX(5px);
   border-color: var(--primary-color);
   box-shadow: var(--shadow-md);
 }
@@ -2636,15 +2630,6 @@ input:checked + .slider::before {
 }
 
 /* ========== التأثيرات الحية ========== */
-@keyframes slideInDown {
-  from {
-    transform: translateY(-100%);
-  }
-  to {
-    transform: translateY(0);
-  }
-}
-
 .shake {
   animation: shake 0.5s ease-in-out;
 }
@@ -2679,99 +2664,220 @@ input:checked + .slider::before {
   pointer-events: none;
 }
 
-/* ========== التكيف مع الأجهزة المحمولة ========== */
+/* ========== إصلاح شريط الأعضاء للموبايل ========== */
 @media (max-width: 768px) {
-  :root {
-    --header-height: 3.5rem;
-    --sidebar-width: 85vw;
-  }
-
   .app-container {
-    grid-template-rows: auto 1fr;
+    grid-template-areas:
+      "top-tabs"
+      "main-content";
   }
+  
+  .members-sidebar {
+    width: 100vw;
+    right: -100vw;
+    top: 0;
+    z-index: 9999;
+    border-left: none;
+  }
+  
+  .members-sidebar.show {
+    transform: translateX(-100vw);
+    animation: slideInRightMobile 0.3s ease-out;
+  }
+  
+  @keyframes slideInRightMobile {
+    from {
+      transform: translateX(100%);
+    }
+    to {
+      transform: translateX(0);
+    }
+  }
+  
+  .sidebar-header {
+    padding: 1rem;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+  
+  .close-sidebar {
+    width: 40px;
+    height: 40px;
+    background: rgba(255, 255, 255, 0.3);
+  }
+  
+  .leaderboard {
+    padding: 1rem;
+  }
+  
+  .member-item {
+    padding: 0.75rem;
+    margin-bottom: 0.5rem;
+    flex-wrap: nowrap;
+  }
+  
+  .member-rank {
+    min-width: 25px;
+    font-size: 0.8rem;
+  }
+  
+  .avatar-container {
+    width: 40px;
+    height: 40px;
+    flex-shrink: 0;
+  }
+  
+  .member-avatar {
+    width: 40px;
+    height: 40px;
+  }
+  
+  .member-info {
+    flex: 1;
+    min-width: 0;
+    padding: 0 0.5rem;
+  }
+  
+  .member-name {
+    font-size: 0.8rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 120px;
+  }
+  
+  .member-points {
+    font-size: 0.7rem;
+  }
+  
+  .member-actions {
+    display: flex;
+    gap: 0.25rem;
+    opacity: 1 !important;
+    flex-shrink: 0;
+  }
+  
+  .ban-button,
+  .remove-button {
+    width: 30px;
+    height: 30px;
+    font-size: 0.8rem;
+  }
+  
+  .banned-section {
+    padding: 1rem;
+  }
+  
+  .unban-button {
+    width: 100%;
+    margin-top: 0.5rem;
+  }
+  
+  /* إضافة طبقة غامقة خلف الشريط */
+  .members-sidebar.show::before {
+    content: '';
+    position: fixed;
+    top: 0;
+    left: -100vw;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: -1;
+  }
+  
+  /* منع التمرير في الجسم عند فتح الشريط */
+  body.sidebar-open {
+    overflow: hidden;
+  }
+}
 
+/* إصلاحات إضافية للموبايل */
+@media (max-width: 768px) {
   .top-tabs {
     padding: 0 1rem;
+    height: auto;
+    min-height: 60px;
+    flex-wrap: wrap;
   }
-
+  
   .main-tabs {
-    gap: 0.25rem;
+    width: 100%;
+    order: 2;
+    margin-top: 0.5rem;
+    padding-bottom: 0.5rem;
+    overflow-x: auto;
   }
-
+  
   .tab-button {
     padding: 0.5rem 0.75rem;
-    font-size: 0.75rem;
+    font-size: 0.7rem;
+    min-width: max-content;
   }
-
+  
   .tab-icon {
-    font-size: 1rem;
+    font-size: 0.9rem;
   }
-
+  
+  .menu-toggle {
+    order: 1;
+  }
+  
   .main-content {
     padding: 1rem;
   }
-
+  
   .timer-container,
   .profile-container,
-  .shop-container,
-  .group-creation,
-  .join-group {
+  .shop-container {
     padding: 1.5rem;
   }
-
+  
   .time {
     font-size: 2.5rem;
   }
-
+  
   .stats-display {
     gap: 1rem;
   }
-
+  
   .stat-box {
-    min-width: 100px;
+    min-width: calc(50% - 0.5rem);
     padding: 1rem;
   }
-
+  
   .timer-controls {
     flex-direction: column;
     align-items: stretch;
   }
-
+  
   .control-button {
     min-width: auto;
     width: 100%;
   }
-
+  
   .group-management {
     grid-template-columns: 1fr;
     gap: 1.5rem;
   }
-
+  
   .groups-grid {
     grid-template-columns: 1fr;
   }
-
+  
   .shop-items {
     grid-template-columns: 1fr;
   }
-
-  .members-sidebar {
-    width: 100vw;
-    right: -100vw;
-  }
-
-  .members-sidebar.show {
-    transform: translateX(-100vw);
-  }
-
+  
   .modal-content {
     padding: 1.5rem;
+    margin: 1rem;
   }
-
+  
   .modal-actions {
     flex-direction: column;
   }
-
+  
   .theme-toggle {
     bottom: 1rem;
     right: 1rem;
@@ -2779,50 +2885,50 @@ input:checked + .slider::before {
     height: 3rem;
     font-size: 1.25rem;
   }
-
-  .member-avatar:hover,
-  .avatar-hover {
-    transform: scale(1.1);
-  }
-
-  .profile-avatar:hover {
-    transform: perspective(300px) rotateY(5deg) rotateX(5deg) scale(1.05);
-  }
-
-  .user-avatar:hover {
-    transform: perspective(300px) rotateY(5deg) rotateX(5deg) scale(1.05);
-  }
-}
-
-@media (max-width: 480px) {
-  .time {
-    font-size: 2rem;
-  }
-
-  .stat-value {
-    font-size: 1.5rem;
-  }
-
+  
   .profile-avatar {
     width: 80px;
     height: 80px;
   }
-
+  
   .user-avatar {
     width: 60px;
     height: 60px;
   }
-
-  .user-details h2 {
-    font-size: 1.25rem;
-  }
-
+  
   .welcome-screen h1 {
     font-size: 2rem;
   }
-
+  
   .welcome-screen p {
     font-size: 1rem;
+  }
+}
+
+/* إصلاحات للشاشات الصغيرة جداً */
+@media (max-width: 480px) {
+  .time {
+    font-size: 2rem;
+  }
+  
+  .stat-value {
+    font-size: 1.5rem;
+  }
+  
+  .member-name {
+    max-width: 100px;
+  }
+  
+  .user-details h2 {
+    font-size: 1.25rem;
+  }
+  
+  .group-actions {
+    flex-direction: column;
+  }
+  
+  .group-actions button {
+    width: 100%;
   }
 }
 
@@ -2831,10 +2937,15 @@ input:checked + .slider::before {
   body {
     overscroll-behavior-y: contain;
   }
-
+  
   .theme-toggle {
     bottom: 1.5rem;
     right: 1.5rem;
+  }
+  
+  .members-sidebar.show {
+    padding-top: calc(1rem + env(safe-area-inset-top));
+    padding-bottom: calc(1rem + env(safe-area-inset-bottom));
   }
 }
 
@@ -2960,13 +3071,63 @@ input:checked + .slider::before {
   pointer-events: none;
 }
 
-/* ========== تأثيرات الجرافيك ========== */
-.neon-border {
-  border: 2px solid transparent;
-  background: 
-    linear-gradient(var(--card-bg), var(--card-bg)) padding-box,
-    var(--primary-gradient) border-box;
-  animation: glow 2s infinite;
+/* ========== تأثيرات النجمة ========== */
+.stars {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  z-index: -1;
+}
+
+.star {
+  position: absolute;
+  background: white;
+  border-radius: 50%;
+  animation: twinkle 2s infinite;
+}
+
+@keyframes twinkle {
+  0%, 100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* ========== تأثيرات التحميل المتحركة ========== */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--secondary-bg) 25%,
+    var(--tertiary-bg) 50%,
+    var(--secondary-bg) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: var(--radius-md);
+}
+
+/* ========== تأثيرات النقل السلس ========== */
+.smooth-transition {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ========== تأثيرات الظهور التدريجي ========== */
+.stagger-item {
+  opacity: 0;
+  transform: translateY(20px);
+  animation: fadeInUp 0.5s ease forwards;
+}
+
+@keyframes fadeInUp {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* ========== تأثيرات الشريط المتحرك ========== */
@@ -3019,83 +3180,430 @@ input:checked + .slider::before {
   }
 }
 
-/* ========== تأثيرات الطقس ========== */
-.snow {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  pointer-events: none;
+/* ========== إصلاحات نهائية ========== */
+*:focus {
+  outline: 2px solid var(--primary-color);
+  outline-offset: 2px;
 }
 
-.snowflake {
-  position: absolute;
-  background: white;
-  border-radius: 50%;
-  opacity: 0.8;
-  animation: snowfall linear infinite;
+*:focus:not(:focus-visible) {
+  outline: none;
 }
 
-@keyframes snowfall {
+img {
+  max-width: 100%;
+  height: auto;
+}
+
+button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+input, textarea, select {
+  font-family: inherit;
+  font-size: inherit;
+}
+
+/* ========== تحسينات الأداء ========== */
+.will-change-transform {
+  will-change: transform;
+}
+
+.will-change-opacity {
+  will-change: opacity;
+}
+
+/* ========== تأثيرات خاصة للشريط الجانبي ========== */
+.members-sidebar {
+  transform: translate3d(0, 0, 0);
+  backface-visibility: hidden;
+  perspective: 1000px;
+}
+
+/* ========== تأثيرات اللمس للموبايل ========== */
+@media (hover: none) {
+  .member-item:hover {
+    transform: none;
+  }
+  
+  .member-actions {
+    opacity: 1 !important;
+  }
+  
+  .tab-button:hover {
+    transform: none;
+  }
+  
+  .control-button:hover {
+    transform: none !important;
+  }
+}
+
+/* ========== دعم اللمس المتقدم ========== */
+.touch-action-manipulation {
+  touch-action: manipulation;
+}
+
+/* ========== تحسينات الوصول ========== */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ========== تأثيرات التمرير الناعم ========== */
+.scroll-smooth {
+  scroll-behavior: smooth;
+}
+
+/* ========== تأثيرات الحدود المتحركة ========== */
+.animated-border {
+  position: relative;
+  border: 2px solid transparent;
+  background: 
+    linear-gradient(var(--card-bg), var(--card-bg)) padding-box,
+    var(--primary-gradient) border-box;
+  animation: borderAnimation 2s linear infinite;
+}
+
+@keyframes borderAnimation {
   0% {
-    transform: translateY(-100%) rotate(0deg);
+    border-image-source: var(--primary-gradient);
+  }
+  50% {
+    border-image-source: var(--secondary-gradient);
   }
   100% {
-    transform: translateY(100vh) rotate(360deg);
+    border-image-source: var(--primary-gradient);
   }
 }
 
-/* ========== تأثيرات النجمة ========== */
-.stars {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  pointer-events: none;
-  z-index: -1;
+/* ========== تأثيرات الظل المتحرك ========== */
+.animated-shadow {
+  animation: shadowAnimation 3s ease-in-out infinite;
 }
 
-.star {
-  position: absolute;
-  background: white;
-  border-radius: 50%;
-  animation: twinkle 2s infinite;
-}
-
-@keyframes twinkle {
+@keyframes shadowAnimation {
   0%, 100% {
-    opacity: 0.3;
+    box-shadow: var(--shadow-lg);
   }
   50% {
+    box-shadow: var(--shadow-xl);
+  }
+}
+
+/* ========== تأثيرات النص المتحرك ========== */
+.animated-text {
+  background: var(--primary-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: textShimmer 2s linear infinite;
+  background-size: 200% auto;
+}
+
+@keyframes textShimmer {
+  0% {
+    background-position: 0% center;
+  }
+  100% {
+    background-position: 200% center;
+  }
+}
+
+/* ========== تأثيرات الخلفية المتحركة ========== */
+.animated-bg {
+  background: linear-gradient(
+    45deg,
+    var(--primary-color),
+    var(--secondary-color),
+    var(--accent-color),
+    var(--primary-color)
+  );
+  background-size: 400% 400%;
+  animation: gradientAnimation 15s ease infinite;
+}
+
+@keyframes gradientAnimation {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+/* ========== تأثيرات القلب ========== */
+.heartbeat {
+  animation: heartbeat 1.5s ease-in-out infinite;
+}
+
+@keyframes heartbeat {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.1);
+  }
+}
+
+/* ========== تأثيرات الدوامة ========== */
+.vortex {
+  animation: vortex 3s linear infinite;
+}
+
+@keyframes vortex {
+  0% {
+    transform: rotate(0deg) scale(1);
+  }
+  50% {
+    transform: rotate(180deg) scale(1.1);
+  }
+  100% {
+    transform: rotate(360deg) scale(1);
+  }
+}
+
+/* ========== تأثيرات الانزلاق ========== */
+.slide-up {
+  animation: slideUp 0.5s ease-out;
+}
+
+.slide-down {
+  animation: slideDown 0.5s ease-out;
+}
+
+.slide-left {
+  animation: slideLeft 0.5s ease-out;
+}
+
+.slide-right {
+  animation: slideRight 0.5s ease-out;
+}
+
+@keyframes slideLeft {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
     opacity: 1;
   }
 }
 
-/* ========== تأثيرات النجمة ========== */
-.stars {
-  position: fixed;
-  top: 0;
+@keyframes slideRight {
+  from {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+/* ========== تأثيرات الاهتزاز ========== */
+.vibrate {
+  animation: vibrate 0.3s linear infinite;
+}
+
+@keyframes vibrate {
+  0%, 100% {
+    transform: translateX(0);
+  }
+  20%, 60% {
+    transform: translateX(-2px);
+  }
+  40%, 80% {
+    transform: translateX(2px);
+  }
+}
+
+/* ========== تأثيرات الانعكاس ========== */
+.reflect {
+  position: relative;
+}
+
+.reflect::after {
+  content: '';
+  position: absolute;
+  bottom: -100%;
   left: 0;
   right: 0;
-  bottom: 0;
-  pointer-events: none;
-  z-index: -1;
+  height: 100%;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    rgba(255, 255, 255, 0.1)
+  );
+  transform: scaleY(-1);
+  opacity: 0.5;
 }
 
-.star {
-  position: absolute;
-  background: white;
-  border-radius: 50%;
-  animation: twinkle 2s infinite;
+/* ========== تأثيرات العمق ========== */
+.depth-1 {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
 }
 
-@keyframes twinkle {
-  0%, 100% {
-    opacity: 0.3;
+.depth-2 {
+  box-shadow: 0 3px 6px rgba(0, 0, 0, 0.16);
+}
+
+.depth-3 {
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.19);
+}
+
+.depth-4 {
+  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.25);
+}
+
+.depth-5 {
+  box-shadow: 0 19px 38px rgba(0, 0, 0, 0.3);
+}
+
+/* ========== تأثيرات الشفافية ========== */
+.opacity-0 { opacity: 0; }
+.opacity-25 { opacity: 0.25; }
+.opacity-50 { opacity: 0.5; }
+.opacity-75 { opacity: 0.75; }
+.opacity-100 { opacity: 1; }
+
+/* ========== تأثيرات التحويل ========== */
+.transform-none { transform: none; }
+.transform-center { transform: translate(-50%, -50%); }
+.transform-y-2 { transform: translateY(0.5rem); }
+.transform-y-4 { transform: translateY(1rem); }
+.transform-x-2 { transform: translateX(0.5rem); }
+.transform-x-4 { transform: translateX(1rem); }
+
+/* ========== تأثيرات التدرج ========== */
+.gradient-primary {
+  background: var(--primary-gradient);
+}
+
+.gradient-secondary {
+  background: var(--secondary-gradient);
+}
+
+.gradient-accent {
+  background: var(--accent-gradient);
+}
+
+.gradient-warning {
+  background: var(--warning-gradient);
+}
+
+/* ========== تأثيرات الحدود ========== */
+.border-animated {
+  border: 2px solid transparent;
+  background: 
+    linear-gradient(var(--card-bg), var(--card-bg)) padding-box,
+    var(--primary-gradient) border-box;
+}
+
+.border-dashed-animated {
+  border: 2px dashed transparent;
+  background: 
+    linear-gradient(var(--card-bg), var(--card-bg)) padding-box,
+    var(--primary-gradient) border-box;
+}
+
+/* ========== تأثيرات النص ========== */
+.text-stroke {
+  -webkit-text-stroke: 1px var(--primary-color);
+  color: transparent;
+}
+
+.text-3d {
+  text-shadow: 
+    1px 1px 0 var(--primary-dark),
+    2px 2px 0 var(--primary-dark),
+    3px 3px 0 var(--primary-dark);
+}
+
+/* ========== تأثيرات الصور ========== */
+.image-glow {
+  filter: drop-shadow(0 0 10px rgba(79, 70, 229, 0.5));
+}
+
+.image-blur {
+  filter: blur(5px);
+  transition: filter 0.3s ease;
+}
+
+.image-blur:hover {
+  filter: blur(0);
+}
+
+/* ========== تأثيرات الخلفية ========== */
+.bg-pattern {
+  background-image: 
+    radial-gradient(circle at 25% 25%, rgba(79, 70, 229, 0.1) 0%, transparent 50%),
+    radial-gradient(circle at 75% 75%, rgba(16, 185, 129, 0.1) 0%, transparent 50%);
+}
+
+.bg-grid {
+  background-image: 
+    linear-gradient(rgba(79, 70, 229, 0.1) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(79, 70, 229, 0.1) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+/* ========== تأثيرات الشريط الجانبي النهائية ========== */
+.members-sidebar.show {
+  box-shadow: 
+    0 0 0 100vw rgba(0, 0, 0, 0.5),
+    var(--shadow-xl);
+}
+
+/* ========== تأثيرات الإغلاق ========== */
+.members-sidebar.closing {
+  animation: slideOutRightMobile 0.3s ease-out forwards;
+}
+
+@keyframes slideOutRightMobile {
+  from {
+    transform: translateX(0);
   }
-  50% {
-    opacity: 1;
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* ========== تأثيرات اللمس للشريط ========== */
+@media (hover: none) and (pointer: coarse) {
+  .members-sidebar {
+    -webkit-overflow-scrolling: touch;
+  }
+  
+  .member-item {
+    min-height: 60px;
+  }
+  
+  .ban-button,
+  .remove-button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+/* ========== تحسينات الأداء النهائية ========== */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }
