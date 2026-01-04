@@ -16,8 +16,7 @@ import {
   onSnapshot, 
   runTransaction, 
   arrayUnion,
-  writeBatch,
-  increment
+  writeBatch
 } from 'firebase/firestore';
 import './App.css';
 import AttendanceCalendar from './components/AttendanceCalendar';
@@ -53,7 +52,7 @@ const generateUniqueCode = () => {
   return code;
 };
 
-// خدمة إدارة المستخدمين مع التحديثات
+// خدمة إدارة المستخدمين
 const userService = {
   createOrUpdateUser: async (user) => {
     try {
@@ -61,6 +60,7 @@ const userService = {
       const userSnap = await getDoc(userRef);
       
       if (!userSnap.exists()) {
+        // إنشاء مستخدم جديد مع كود مميز
         const uniqueCode = generateUniqueCode();
         await setDoc(userRef, {
           uid: user.uid,
@@ -71,11 +71,11 @@ const userService = {
           hasVerifiedCode: false,
           createdAt: new Date(),
           points: 0,
-          level: 1,
-          totalStudyTime: 0 // إجمالي وقت الدراسة بالثواني
+          level: 1
         });
         return { uniqueCode, hasVerifiedCode: false };
       } else {
+        // المستخدم موجود بالفعل
         return {
           uniqueCode: userSnap.data().uniqueCode,
           hasVerifiedCode: userSnap.data().hasVerifiedCode || false
@@ -154,12 +154,14 @@ const userService = {
           verifiedAt: new Date()
         });
         
+        // تحديث حالة التحقق في مستند المستخدم
         await updateDoc(doc(db, "users", userId), {
           hasVerifiedCode: true
         });
         
         return { verified: true, message: "تم التحقق بنجاح" };
       } else {
+        // زيادة عدد المحاولات
         await updateDoc(codeRef, {
           attempts: codeData.attempts + 1
         });
@@ -200,135 +202,6 @@ const userService = {
       return userSnap.data().hasVerifiedCode || false;
     } catch (error) {
       console.error("Error checking code verification:", error);
-      throw error;
-    }
-  },
-
-  // دالة جديدة: تحديث إجمالي وقت الدراسة باستخدام Increment
-  updateTotalStudyTime: async (userId, additionalTime) => {
-    try {
-      const userRef = doc(db, "users", userId);
-      await updateDoc(userRef, {
-        totalStudyTime: increment(additionalTime)
-      });
-    } catch (error) {
-      console.error("Error updating total study time:", error);
-    }
-  },
-
-  // دالة جديدة: الحصول على إجمالي وقت الدراسة
-  getTotalStudyTime: async (userId) => {
-    try {
-      const userRef = doc(db, "users", userId);
-      const userSnap = await getDoc(userRef);
-      
-      if (!userSnap.exists()) {
-        return 0;
-      }
-      
-      return userSnap.data().totalStudyTime || 0;
-    } catch (error) {
-      console.error("Error getting total study time:", error);
-      return 0;
-    }
-  },
-
-  // دالة جديدة: تحديث وقت المجموعة
-  updateGroupStudyTime: async (userId, groupId, additionalTime) => {
-    try {
-      const sessionRef = doc(db, "studySessions", `${userId}_${groupId}`);
-      const sessionSnap = await getDoc(sessionRef);
-      
-      if (!sessionSnap.exists()) {
-        // إنشاء جلسة جديدة
-        await setDoc(sessionRef, {
-          userId,
-          groupId,
-          totalTime: additionalTime,
-          lastUpdated: new Date(),
-          createdAt: new Date(),
-          sessionsCount: 1
-        });
-      } else {
-        // تحديث الجلسة الحالية
-        await updateDoc(sessionRef, {
-          totalTime: increment(additionalTime),
-          lastUpdated: new Date(),
-          sessionsCount: increment(1)
-        });
-      }
-      
-      // حفظ الجلسة التفصيلية
-      const detailedSessionRef = await addDoc(collection(db, "detailedSessions"), {
-        userId,
-        groupId,
-        duration: additionalTime,
-        timestamp: new Date(),
-        pointsEarned: Math.floor(additionalTime / 30) // تقريب النقاط
-      });
-      
-      return detailedSessionRef.id;
-    } catch (error) {
-      console.error("Error updating group study time:", error);
-      throw error;
-    }
-  },
-
-  // دالة جديدة: الحصول على وقت المجموعة
-  getGroupStudyTime: async (userId, groupId) => {
-    try {
-      const sessionRef = doc(db, "studySessions", `${userId}_${groupId}`);
-      const sessionSnap = await getDoc(sessionRef);
-      
-      if (!sessionSnap.exists()) {
-        return 0;
-      }
-      
-      return sessionSnap.data().totalTime || 0;
-    } catch (error) {
-      console.error("Error getting group study time:", error);
-      return 0;
-    }
-  },
-
-  // دالة جديدة: الحصول على جلسات الدراسة التفصيلية
-  getDetailedSessions: async (userId, groupId, limit = 10) => {
-    try {
-      const q = query(
-        collection(db, "detailedSessions"),
-        where("userId", "==", userId),
-        where("groupId", "==", groupId)
-      );
-      
-      const querySnapshot = await getDocs(q);
-      const sessions = querySnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      
-      // ترتيب من الأحدث إلى الأقدم
-      sessions.sort((a, b) => b.timestamp.toDate() - a.timestamp.toDate());
-      
-      return sessions.slice(0, limit);
-    } catch (error) {
-      console.error("Error getting detailed sessions:", error);
-      return [];
-    }
-  },
-
-  // دالة جديدة: إعادة تعيين وقت المجموعة
-  resetGroupStudyTime: async (userId, groupId) => {
-    try {
-      const sessionRef = doc(db, "studySessions", `${userId}_${groupId}`);
-      await updateDoc(sessionRef, {
-        totalTime: 0,
-        lastUpdated: new Date(),
-        resetAt: new Date()
-      });
-      
-      return true;
-    } catch (error) {
-      console.error("Error resetting group study time:", error);
       throw error;
     }
   }
@@ -519,7 +392,7 @@ const examService = {
 
 function Timer({ user, onBack, groupId }) {
   const [isRunning, setIsRunning] = useState(false);
-  const [time, setTime] = useState(0); // الوقت الحالي في الذاكرة
+  const [time, setTime] = useState(0);
   const [points, setPoints] = useState(0);
   const [lastUpdateTime, setLastUpdateTime] = useState(0);
   const [members, setMembers] = useState([]);
@@ -542,16 +415,11 @@ function Timer({ user, onBack, groupId }) {
   const [selectedExam, setSelectedExam] = useState(null);
   const [activeExamTab, setActiveExamTab] = useState('list');
   const [examLoading, setExamLoading] = useState(false);
-  const [sessionStartTime, setSessionStartTime] = useState(null);
-  const [totalStudyTime, setTotalStudyTime] = useState(0);
-  const [groupStudyTime, setGroupStudyTime] = useState(0);
-  const [lastSavedTime, setLastSavedTime] = useState(Date.now());
-  const [isSyncing, setIsSyncing] = useState(false);
 
-  // حساب المستويات
+  // نظام المستويات المعدل
   const calculateLevel = (points) => {
-    const basePoints = 100;
-    const growthFactor = 1.2;
+    const basePoints = 100; // النقاط المطلوبة للوصول للمستوى 2
+    const growthFactor = 1.2; // عامل النمو بين المستويات
     
     if (points < basePoints) {
       return {
@@ -582,7 +450,7 @@ function Timer({ user, onBack, groupId }) {
     };
   };
 
-  // نظام الشارات
+  // نظام الشارات المعدل
   const getBadge = (level) => {
     const badges = {
       1: { name: "المبتدئ", icon: "🌱", color: "#10B981", bgColor: "rgba(16, 185, 129, 0.1)" },
@@ -594,6 +462,7 @@ function Timer({ user, onBack, groupId }) {
       30: { name: "رائد المعرفة", icon: "🚀", color: "#06B6D4", bgColor: "rgba(6, 182, 212, 0.1)" }
     };
     
+    // إيجاد أعلى شارة مؤهلة
     const eligibleLevels = Object.keys(badges)
       .map(Number)
       .filter(lvl => level >= lvl)
@@ -604,330 +473,6 @@ function Timer({ user, onBack, groupId }) {
 
   const { currentLevel, progress, pointsToNextLevel } = calculateLevel(points);
   const currentBadge = getBadge(currentLevel);
-
-  // تنسيق الوقت
-  const formatTime = (seconds) => {
-    const hrs = Math.floor(seconds / 3600);
-    const mins = Math.floor((seconds % 3600) / 60);
-    const secs = seconds % 60;
-    
-    return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  };
-
-  // تنسيق الوقت بشكل نصي (ساعات، دقائق، ثواني)
-  const formatTimeDetailed = (seconds) => {
-    const hrs = Math.floor(seconds / 3600);
-    const mins = Math.floor((seconds % 3600) / 60);
-    const secs = seconds % 60;
-    
-    const parts = [];
-    if (hrs > 0) parts.push(`${hrs} ساعة`);
-    if (mins > 0) parts.push(`${mins} دقيقة`);
-    if (secs > 0 || parts.length === 0) parts.push(`${secs} ثانية`);
-    
-    return parts.join(' و ');
-  };
-
-  // حفظ الوقت في Firebase
-  const saveTimeToFirebase = async (timeToSave) => {
-    try {
-      setIsSyncing(true);
-      
-      // تحديث وقت المجموعة
-      await userService.updateGroupStudyTime(user.uid, groupId, timeToSave);
-      
-      // تحديث إجمالي وقت الدراسة
-      await userService.updateTotalStudyTime(user.uid, timeToSave);
-      
-      setLastSavedTime(Date.now());
-      return true;
-    } catch (error) {
-      console.error("Error saving time to Firebase:", error);
-      showNotification("❌ حدث خطأ في حفظ الوقت");
-      return false;
-    } finally {
-      setIsSyncing(false);
-    }
-  };
-
-  // تحميل الوقت من Firebase
-  const loadTimeFromFirebase = async () => {
-    try {
-      setIsSyncing(true);
-      
-      // جلب وقت المجموعة
-      const groupTime = await userService.getGroupStudyTime(user.uid, groupId);
-      setGroupStudyTime(groupTime);
-      setTime(groupTime);
-      
-      // جلب إجمالي وقت الدراسة
-      const totalTime = await userService.getTotalStudyTime(user.uid);
-      setTotalStudyTime(totalTime);
-      
-      // جلب الجلسات التفصيلية
-      const sessions = await userService.getDetailedSessions(user.uid, groupId, 10);
-      setStudySessions(sessions);
-      
-      return groupTime;
-    } catch (error) {
-      console.error("Error loading time from Firebase:", error);
-      showNotification("❌ حدث خطأ في تحميل الوقت");
-      return 0;
-    } finally {
-      setIsSyncing(false);
-    }
-  };
-
-  // إضافة جلسة دراسة وحفظها في Firebase
-  const addStudySession = async (duration, pointsEarned) => {
-    const newSession = {
-      date: new Date(),
-      duration,
-      pointsEarned,
-      groupId,
-      savedToFirebase: false
-    };
-    
-    // تحديث الحالة المحلية
-    setStudySessions(prev => [newSession, ...prev].slice(0, 10));
-    
-    // تحديث الوقت المحلي
-    const newGroupTime = groupStudyTime + duration;
-    setGroupStudyTime(newGroupTime);
-    setTime(newGroupTime);
-    
-    // تحديث إجمالي الوقت المحلي
-    const newTotalTime = totalStudyTime + duration;
-    setTotalStudyTime(newTotalTime);
-    
-    try {
-      // حفظ في Firebase في الخلفية
-      saveTimeToFirebase(duration);
-    } catch (error) {
-      console.error("Error saving session to Firebase:", error);
-      // يمكن إضافة منطق لإعادة المحاولة لاحقاً
-    }
-  };
-
-  // تحديث النقاط في قاعدة البيانات
-  const updatePoints = async (newPoints) => {
-    try {
-      const groupDoc = await getDoc(doc(db, "studyGroups", groupId));
-      if (groupDoc.exists() && !groupDoc.data().bannedMembers?.includes(user.uid)) {
-        await updateDoc(doc(db, "studyGroups", groupId), {
-          [`userPoints.${user.uid}`]: newPoints
-        });
-      }
-    } catch (error) {
-      console.error("Error updating points:", error);
-    }
-  };
-
-  // جلب بيانات المجموعة
-  const fetchGroupData = async () => {
-    try {
-      setLoadingMembers(true);
-      const groupDoc = await getDoc(doc(db, "studyGroups", groupId));
-      if (groupDoc.exists()) {
-        const groupData = groupDoc.data();
-        setIsCreator(groupData.creator === user.uid);
-        setBannedMembers(groupData.bannedMembers || []);
-        
-        const userPoints = groupData.userPoints?.[user.uid] || 0;
-        setPoints(userPoints);
-        
-        if (groupData.members) {
-          const membersPromises = groupData.members.map(async (uid) => {
-            const userDoc = await getDoc(doc(db, "users", uid));
-            if (userDoc.exists()) {
-              return {
-                uid,
-                name: userDoc.data().displayName,
-                photoURL: userDoc.data().photoURL,
-                points: groupData.userPoints?.[uid] || 0
-              };
-            }
-            return null;
-          });
-          
-          const membersList = (await Promise.all(membersPromises)).filter(Boolean);
-          membersList.sort((a, b) => b.points - a.points);
-          setMembers(membersList);
-        }
-      }
-    } catch (error) {
-      console.error("Error fetching group data:", error);
-    } finally {
-      setLoadingMembers(false);
-    }
-  };
-
-  // التأثير الرئيسي: تحميل البيانات عند بدء المكون
-  useEffect(() => {
-    const loadInitialData = async () => {
-      await Promise.all([
-        loadTimeFromFirebase(),
-        fetchGroupData()
-      ]);
-    };
-    
-    loadInitialData();
-    
-    // الاشتراك في تحديثات المجموعة
-    const unsubscribe = onSnapshot(doc(db, "studyGroups", groupId), fetchGroupData);
-    
-    return () => {
-      unsubscribe();
-      // حفظ الوقت النهائي عند مغادرة المكون
-      if (isRunning && sessionStartTime) {
-        const elapsedTime = Math.floor((Date.now() - sessionStartTime) / 1000);
-        if (elapsedTime > 0) {
-          saveTimeToFirebase(elapsedTime);
-        }
-      }
-    };
-  }, [groupId, user.uid]);
-
-  // تأثير المؤقت الرئيسي
-  useEffect(() => {
-    let interval;
-    
-    if (isRunning) {
-      // بدء توقيت الجلسة
-      setSessionStartTime(Date.now());
-      setLastSavedTime(Date.now());
-      
-      interval = setInterval(() => {
-        setTime(prev => {
-          const newTime = prev + 1;
-          
-          // تحديث النقاط كل 30 ثانية
-          if (newTime % 30 === 0) {
-            const pointsEarned = activeEffects.some(e => e.type === 'double_points') ? 2 : 1;
-            setPoints(prevPoints => {
-              const updatedPoints = prevPoints + pointsEarned;
-              updatePoints(updatedPoints);
-              return updatedPoints;
-            });
-            addStudySession(1, pointsEarned); // إضافة ثانية واحدة للجلسة
-          }
-          
-          // حفظ الوقت في Firebase كل دقيقة (60 ثانية)
-          if (newTime % 60 === 0 && newTime !== lastUpdateTime) {
-            // نحفظ دقيقة كاملة من العمل
-            saveTimeToFirebase(60);
-            setLastUpdateTime(newTime);
-          }
-          
-          return newTime;
-        });
-      }, 1000);
-    } else if (sessionStartTime) {
-      // إيقاف المؤعت - حساب الوقت المنقضي وحفظه
-      const elapsedTime = Math.floor((Date.now() - sessionStartTime) / 1000);
-      
-      if (elapsedTime > 0) {
-        // تحديث الوقت المحلي
-        const newGroupTime = groupStudyTime + elapsedTime;
-        setGroupStudyTime(newGroupTime);
-        setTime(newGroupTime);
-        
-        // تحديث إجمالي الوقت المحلي
-        const newTotalTime = totalStudyTime + elapsedTime;
-        setTotalStudyTime(newTotalTime);
-        
-        // حفظ في Firebase
-        saveTimeToFirebase(elapsedTime);
-        
-        // إضافة الجلسة
-        addStudySession(elapsedTime, 0);
-      }
-      
-      setSessionStartTime(null);
-    }
-    
-    return () => {
-      if (interval) {
-        clearInterval(interval);
-      }
-    };
-  }, [isRunning, activeEffects, sessionStartTime]);
-
-  // تأثير لحفظ الوقت عند إعادة تحميل الصفحة
-  useEffect(() => {
-    const handleBeforeUnload = async () => {
-      if (isRunning && sessionStartTime) {
-        const elapsedTime = Math.floor((Date.now() - sessionStartTime) / 1000);
-        if (elapsedTime > 0) {
-          // محاولة حفظ متزامنة قبل الخروج
-          await saveTimeToFirebase(elapsedTime);
-        }
-      }
-    };
-    
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'hidden') {
-        if (isRunning && sessionStartTime) {
-          const elapsedTime = Math.floor((Date.now() - sessionStartTime) / 1000);
-          if (elapsedTime > 0) {
-            saveTimeToFirebase(elapsedTime);
-          }
-        }
-      } else {
-        // تحديث البيانات عند العودة
-        fetchGroupData();
-        loadTimeFromFirebase();
-      }
-    };
-    
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    
-    return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, [isRunning, time, sessionStartTime]);
-
-  // تأثير لحفظ الوقت بشكل دوري كل 30 ثانية
-  useEffect(() => {
-    const autoSaveInterval = setInterval(() => {
-      if (isRunning && sessionStartTime) {
-        const elapsedTime = Math.floor((Date.now() - sessionStartTime) / 1000);
-        const timeSinceLastSave = Math.floor((Date.now() - lastSavedTime) / 1000);
-        
-        // حفظ إذا مرت 30 ثانية منذ آخر حفظ
-        if (timeSinceLastSave >= 30 && elapsedTime > 0) {
-          saveTimeToFirebase(elapsedTime);
-        }
-      }
-    }, 10000); // التحقق كل 10 ثواني
-
-    return () => clearInterval(autoSaveInterval);
-  }, [isRunning, sessionStartTime, lastSavedTime]);
-
-  // إعادة ضبط المؤقت
-  const resetTimer = async () => {
-    if (window.confirm("هل أنت متأكد من إعادة ضبط المؤقت؟ سيتم إعادة الوقت في هذه المجموعة إلى الصفر.")) {
-      setIsRunning(false);
-      setSessionStartTime(null);
-      
-      try {
-        // إعادة تعيين الوقت في Firebase
-        await userService.resetGroupStudyTime(user.uid, groupId);
-        
-        // إعادة تعيين الحالة المحلية
-        setTime(0);
-        setGroupStudyTime(0);
-        
-        showNotification("⏱ تم إعادة ضبط المؤقت بنجاح");
-      } catch (error) {
-        console.error("Error resetting timer:", error);
-        showNotification("❌ حدث خطأ أثناء إعادة الضبط");
-      }
-    }
-  };
-
   const shopItems = [
     { 
       id: "boost", 
@@ -1048,9 +593,125 @@ function Timer({ user, onBack, groupId }) {
     setTimeout(() => setNotification(null), 3000);
   };
 
-  const toggleMembersSidebar = () => {
-    setShowMembers(prev => !prev);
+  const formatTime = (seconds) => {
+    const hrs = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+    
+    return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
+
+  const addStudySession = (duration, pointsEarned) => {
+    const newSession = {
+      date: new Date(),
+      duration,
+      pointsEarned
+    };
+    setStudySessions(prev => [newSession, ...prev].slice(0, 10));
+  };
+
+  const updatePoints = async (newPoints) => {
+    try {
+      const groupDoc = await getDoc(doc(db, "studyGroups", groupId));
+      if (groupDoc.exists() && !groupDoc.data().bannedMembers?.includes(user.uid)) {
+        await updateDoc(doc(db, "studyGroups", groupId), {
+          [`userPoints.${user.uid}`]: newPoints
+        });
+      }
+    } catch (error) {
+      console.error("Error updating points:", error);
+    }
+  };
+
+  const fetchGroupData = async () => {
+    try {
+      setLoadingMembers(true);
+      const groupDoc = await getDoc(doc(db, "studyGroups", groupId));
+      if (groupDoc.exists()) {
+        const groupData = groupDoc.data();
+        setIsCreator(groupData.creator === user.uid);
+        setBannedMembers(groupData.bannedMembers || []);
+        
+        const userPoints = groupData.userPoints?.[user.uid] || 0;
+        setPoints(userPoints);
+        
+        if (groupData.members) {
+          const membersPromises = groupData.members.map(async (uid) => {
+            const userDoc = await getDoc(doc(db, "users", uid));
+            if (userDoc.exists()) {
+              return {
+                uid,
+                name: userDoc.data().displayName,
+                photoURL: userDoc.data().photoURL,
+                points: groupData.userPoints?.[uid] || 0
+              };
+            }
+            return null;
+          });
+          
+          const membersList = (await Promise.all(membersPromises)).filter(Boolean);
+          membersList.sort((a, b) => b.points - a.points);
+          setMembers(membersList);
+        }
+      }
+    } catch (error) {
+      console.error("Error fetching group data:", error);
+    } finally {
+      setLoadingMembers(false);
+    }
+  };
+  
+  useEffect(() => {
+    fetchGroupData();
+    
+    const unsubscribe = onSnapshot(doc(db, "studyGroups", groupId), fetchGroupData);
+    return () => unsubscribe();
+  }, [groupId, user.uid]);
+
+  useEffect(() => {
+    let interval;
+    if (isRunning) {
+      interval = setInterval(() => {
+        setTime(prev => {
+          const newTime = prev + 1;
+          if (newTime % 30 === 0) {
+            const pointsEarned = activeEffects.some(e => e.type === 'double_points') ? 2 : 1;
+            setPoints(prevPoints => prevPoints + pointsEarned);
+            addStudySession(newTime, pointsEarned);
+          }
+          return newTime;
+        });
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [isRunning, activeEffects]);
+
+  useEffect(() => {
+    if (isRunning && time > 0 && time % 30 === 0 && time !== lastUpdateTime) {
+      const newPoints = points + (activeEffects.some(e => e.type === 'double_points') ? 2 : 1);
+      setPoints(newPoints);
+      updatePoints(newPoints);
+      setLastUpdateTime(time);
+      
+      const newLevelData = calculateLevel(newPoints);
+      if (newLevelData.currentLevel > currentLevel) {
+        showNotification(`🎉 تقدمت للمستوى ${newLevelData.currentLevel}!`);
+      }
+    }
+  }, [time, isRunning]);
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        fetchGroupData();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, []);
 
   useEffect(() => {
     const savedMode = JSON.parse(localStorage.getItem('darkMode'));
@@ -1126,6 +787,16 @@ function Timer({ user, onBack, groupId }) {
         showNotification("❌ حدث خطأ أثناء تحديث قائمة الحظر");
       }
     }
+  };
+
+  const resetTimer = () => {
+    setIsRunning(false);
+    setTime(0);
+    showNotification("⏱ تم إعادة ضبط المؤقت");
+  };
+
+  const toggleMembersSidebar = () => {
+    setShowMembers(prev => !prev);
   };
 
   useEffect(() => {
@@ -1370,11 +1041,6 @@ function Timer({ user, onBack, groupId }) {
             <div className="time-display">
               <h2>وقت المذاكرة</h2>
               <div className="time">{formatTime(time)}</div>
-              <div className="time-info">
-                <p className="session-info">⏱ وقت هذه المجموعة: {formatTimeDetailed(time)}</p>
-                <p className="session-info">📊 إجمالي وقت الدراسة: {formatTimeDetailed(totalStudyTime)}</p>
-                {isSyncing && <p className="syncing-info">🔄 جاري المزامنة مع السحابة...</p>}
-              </div>
             </div>
             
             <div className="stats-display">
@@ -1409,16 +1075,14 @@ function Timer({ user, onBack, groupId }) {
               <button 
                 onClick={() => setIsRunning(!isRunning)}
                 className={`control-button ${isRunning ? 'pause-button' : 'start-button'}`}
-                disabled={bannedMembers.includes(user.uid) || isSyncing}
+                disabled={bannedMembers.includes(user.uid)}
               >
                 {isRunning ? ' إيقاف' : ' بدء'}
-                {isSyncing && ' ...'}
               </button>
               
               <button 
                 onClick={resetTimer}
                 className="control-button reset-button"
-                disabled={isSyncing}
               >
                  إعادة تعيين
               </button>
@@ -1428,15 +1092,6 @@ function Timer({ user, onBack, groupId }) {
                 className="control-button members-button"
               >
                 {showMembers ? ' إخفاء الأعضاء' : ' عرض الأعضاء'}
-              </button>
-              
-              <button
-                onClick={() => loadTimeFromFirebase()}
-                className="control-button refresh-button"
-                disabled={isSyncing}
-                title="تحديث البيانات من السحابة"
-              >
-                🔄 تحديث
               </button>
             </div>
 
@@ -1476,13 +1131,6 @@ function Timer({ user, onBack, groupId }) {
               />
               <h2>{user.displayName}</h2>
               <p className="user-level">المستوى {currentLevel}</p>
-              <div className="sync-status">
-                {isSyncing ? (
-                  <span className="syncing">🔄 جاري المزامنة...</span>
-                ) : (
-                  <span className="synced">✅ متزامن مع السحابة</span>
-                )}
-              </div>
             </div>
             
             <div className="profile-stats">
@@ -1493,12 +1141,7 @@ function Timer({ user, onBack, groupId }) {
               
               <div className="stat-row">
                 <span className="stat-label">إجمالي وقت الدراسة:</span>
-                <span className="stat-value">{formatTimeDetailed(totalStudyTime)}</span>
-              </div>
-              
-              <div className="stat-row">
-                <span className="stat-label">وقت هذه المجموعة:</span>
-                <span className="stat-value">{formatTimeDetailed(time)}</span>
+                <span className="stat-value">{Math.floor(time / 3600)} ساعة</span>
               </div>
               
               <div className="stat-row">
@@ -1514,36 +1157,19 @@ function Timer({ user, onBack, groupId }) {
                   {studySessions.map((session, index) => (
                     <div key={index} className="session-item">
                       <span className="session-date">
-                        {new Date(session.date || session.timestamp?.toDate()).toLocaleDateString('ar-SA', {
-                          weekday: 'short',
-                          year: 'numeric',
-                          month: 'short',
-                          day: 'numeric',
-                          hour: '2-digit',
-                          minute: '2-digit'
-                        })}
+                        {new Date(session.date).toLocaleDateString()}
                       </span>
                       <span className="session-duration">
-                        {formatTimeDetailed(session.duration)}
+                        {formatTime(session.duration)}
                       </span>
                       <span className="session-points">
-                        +{session.pointsEarned || 0} نقطة
+                        +{session.pointsEarned} نقطة
                       </span>
                     </div>
                   ))}
                 </div>
               </div>
             )}
-            
-            <div className="profile-actions">
-              <button 
-                onClick={() => loadTimeFromFirebase()} 
-                className="refresh-button"
-                disabled={isSyncing}
-              >
-                🔄 تحديث البيانات من السحابة
-              </button>
-            </div>
           </div>
         )}
         
@@ -1640,7 +1266,7 @@ function Timer({ user, onBack, groupId }) {
               />
             )}
             
-            {activeTab === 'results' && selectedExam && (
+            {activeExamTab === 'results' && selectedExam && (
               <ExamResults 
                 examId={selectedExam.id} 
                 onBack={() => setActiveExamTab('list')}
@@ -1777,7 +1403,6 @@ function Timer({ user, onBack, groupId }) {
   );
 }
 
-// باقي مكون App كما هو بدون تغيير كبير
 function App() {
   const [user, setUser] = useState(null);
   const [groupName, setGroupName] = useState('');
@@ -1909,9 +1534,11 @@ function App() {
           hasVerifiedCode: userData.hasVerifiedCode || false
         });
         
+        // إنشاء كود التحقق للمستخدم
         const codeResult = await userService.createUserCode(result.user.uid);
         console.log('User code:', codeResult.code);
         
+        // التحقق من حالة التحقق للمستخدم
         const isVerified = await userService.checkCodeVerification(result.user.uid);
         if (isVerified) {
           setCodeVerified(true);
@@ -2062,8 +1689,10 @@ function App() {
         setJoinCode('');
         showNotification('تم التحقق بنجاح!');
         
+        // تمكين الميزات الإضافية للمستخدم
         enablePremiumFeatures(user.uid);
         
+        // الحصول على معلومات الكود
         const codeInfo = await userService.getCodeInfo(user.uid);
         console.log('Code info:', codeInfo);
       } else {
@@ -2083,11 +1712,12 @@ function App() {
     if (remainingAttempts <= 0) {
       setShowCodeModal(false);
       showNotification('لقد استنفذت جميع محاولات التحقق. يرجى المحاولة لاحقاً');
-      setCodeAttempts(3);
+      setCodeAttempts(3); // إعادة تعيين المحاولات
     }
   };
 
   const enablePremiumFeatures = (userId) => {
+    // هنا يمكنك إضافة أي منطق لتمكين الميزات المميزة للمستخدم
     console.log(`تم تمكين الميزات المميزة للمستخدم ${userId}`);
   };
 
