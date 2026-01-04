@@ -1461,13 +1461,8 @@ function Timer({ user, onBack, groupId }) {
                   <div className="time">{formatTime(sessionTime)}</div>
                   <div className="total-time-display">
                     <span className="total-time-label">إجمالي وقت الدراسة:</span>
-                    <span className="total-time-value">{formatTimeDetailed(totalStudyTime)}</span>
-                  </div>
-                  {currentSessionId && (
-                    <div className="session-info">
-                      <span className="session-id">رقم الجلسة: {currentSessionId.slice(-8)}</span>
-                      <span className="session-status">{isRunning ? 'نشطة' : 'متوقفة'}</span>
-                    </div>
+                    <span className="total-time-value">{formatTimeDetailed(totalStudyTime)}</span
+         
                   )}
                 </div>
                 
@@ -1553,8 +1548,8 @@ function Timer({ user, onBack, groupId }) {
                 )}
 
                 <div className="time-saving-info">
-                  <p>ⓘ يتم حفظ وقت الدراسة تلقائيًا في Firebase عند إيقاف المؤقت</p>
-                  <p>📊 يمكنك استعادة بياناتك من أي جهاز بنفس حساب Google</p>
+                  <p></p>
+                 
                 </div>
               </>
             )}
@@ -1684,10 +1679,7 @@ function Timer({ user, onBack, groupId }) {
             )}
             
             <div className="data-backup-info">
-              <h4>معلومات النسخ الاحتياطي</h4>
-              <p>✅ يتم حفظ جميع بيانات وقت الدراسة تلقائيًا في سحابة Firebase</p>
-              <p>🔄 يمكنك الوصول إلى بياناتك من أي جهاز بنفس حساب Google</p>
-              <p>🔒 بياناتك محمية ولا يمكن فقدانها حتى عند إعادة تثبيت التطبيق</p>
+              <h4></h4>
             </div>
           </div>
         )}
