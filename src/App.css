@@ -2582,4 +2582,4 @@ input:checked + .slider::before {
     var(--secondary-color) 0%, 
     var(--primary-color) 50%, 
     var(--accent-color) 100%);
-  border-radius: var(--radius-full
+  border-radius: var(--radius-full);
