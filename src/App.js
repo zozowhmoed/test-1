@@ -53,7 +53,7 @@ const generateUniqueCode = () => {
   return code;
 };
 
-// خدمة إدارة وقت الدراسة الدائم
+// خدمة إدارة وقت الدراسة الدائم - تم إصلاحها
 const studyTimeService = {
   startStudySession: async (userId, groupId) => {
     try {
@@ -76,7 +76,8 @@ const studyTimeService = {
     }
   },
 
-  endStudySession: async (sessionId, durationSeconds, pointsEarned) => {
+  // تم إصلاح هذه الدالة لمنع مضاعفة النقاط
+  endStudySession: async (sessionId, durationSeconds) => {
     try {
       const sessionRef = doc(db, "studySessions", sessionId);
       const sessionDoc = await getDoc(sessionRef);
@@ -86,6 +87,9 @@ const studyTimeService = {
       }
       
       const sessionData = sessionDoc.data();
+      
+      // حساب النقاط بشكل صحيح
+      const pointsEarned = Math.floor(durationSeconds / 30);
       
       await updateDoc(sessionRef, {
         endTime: new Date(),
@@ -107,24 +111,27 @@ const studyTimeService = {
         const currentTotal = userDoc.data().totalStudyTime || 0;
         const newTotal = currentTotal + durationSeconds;
         
+        const currentPoints = userDoc.data().points || 0;
+        const newPoints = currentPoints + pointsEarned;
+        
         transaction.update(userRef, {
           totalStudyTime: newTotal,
-          lastStudySession: new Date(),
-          points: increment(pointsEarned)
+          points: newPoints,
+          lastStudySession: new Date()
         });
         
         const groupRef = doc(db, "studyGroups", sessionData.groupId);
         const groupDoc = await transaction.get(groupRef);
         
         if (groupDoc.exists()) {
-          const currentPoints = groupDoc.data().userPoints?.[sessionData.userId] || 0;
+          const currentGroupPoints = groupDoc.data().userPoints?.[sessionData.userId] || 0;
           transaction.update(groupRef, {
-            [`userPoints.${sessionData.userId}`]: currentPoints + pointsEarned
+            [`userPoints.${sessionData.userId}`]: currentGroupPoints + pointsEarned
           });
         }
       });
       
-      return true;
+      return { success: true, pointsEarned };
     } catch (error) {
       console.error("Error ending study session:", error);
       throw error;
@@ -199,20 +206,6 @@ const studyTimeService = {
     } catch (error) {
       console.error("Error getting active session:", error);
       return null;
-    }
-  },
-
-  resumeStudySession: async (sessionId, currentDuration) => {
-    try {
-      const sessionRef = doc(db, "studySessions", sessionId);
-      await updateDoc(sessionRef, {
-        duration: currentDuration,
-        lastResumed: new Date()
-      });
-      return true;
-    } catch (error) {
-      console.error("Error resuming session:", error);
-      throw error;
     }
   },
 
@@ -375,7 +368,7 @@ const userService = {
     }
   },
 
-  verifyUserCode: async (userId, code) => {
+  verifyCode: async (userId, code) => {
     try {
       const codeRef = doc(db, "userCodes", userId);
       const codeSnap = await getDoc(codeRef);
@@ -876,19 +869,42 @@ function Timer({ user, onBack, groupId }) {
     showNotification(lang === 'ar' ? '🇸🇦 تم تغيير اللغة إلى العربية' : '🇬🇧 Language changed to English');
   };
 
+  // دالة لتحميل النقاط من Firebase
+  const loadUserPoints = async () => {
+    try {
+      const userRef = doc(db, "users", user.uid);
+      const userDoc = await getDoc(userRef);
+      
+      if (userDoc.exists()) {
+        const userData = userDoc.data();
+        setPoints(userData.points || 0);
+      }
+    } catch (error) {
+      console.error("Error loading user points:", error);
+    }
+  };
+
+  // تحميل البيانات الأولية
   useEffect(() => {
     const loadStudyData = async () => {
       setIsLoadingTime(true);
       try {
+        // تحميل إجمالي وقت الدراسة
         const totalTime = await studyTimeService.getUserTotalStudyTime(user.uid);
         setTotalStudyTime(totalTime);
         
+        // تحميل النقاط
+        await loadUserPoints();
+        
+        // تحميل جلسات الدراسة الأخيرة
         const recentSessions = await studyTimeService.getUserRecentSessions(user.uid, 10);
         setStudySessions(recentSessions);
         
+        // تحميل الإحصائيات
         const stats = await studyTimeService.getUserStudyStats(user.uid);
         setStudyStats(stats);
         
+        // التحقق من وجود جلسة نشطة
         const activeSession = await studyTimeService.getActiveSession(user.uid, groupId);
         if (activeSession) {
           setCurrentSessionId(activeSession.id);
@@ -907,6 +923,34 @@ function Timer({ user, onBack, groupId }) {
     }
   }, [user, groupId]);
 
+  // استماع مباشر للتغيرات في النقاط ووقت الدراسة من Firebase
+  useEffect(() => {
+    if (!user || !groupId) return;
+    
+    // الاستماع لتحديثات النقاط في Firebase
+    const unsubscribePoints = onSnapshot(doc(db, "users", user.uid), (doc) => {
+      if (doc.exists()) {
+        const userData = doc.data();
+        setPoints(userData.points || 0);
+        setTotalStudyTime(userData.totalStudyTime || 0);
+      }
+    });
+    
+    // الاستماع لتحديثات المجموعة
+    const unsubscribeGroup = onSnapshot(doc(db, "studyGroups", groupId), (doc) => {
+      if (doc.exists()) {
+        const groupData = doc.data();
+        const userPoints = groupData.userPoints?.[user.uid] || 0;
+        setPoints(userPoints);
+      }
+    });
+    
+    return () => {
+      unsubscribePoints();
+      unsubscribeGroup();
+    };
+  }, [user, groupId]);
+
   const startNewSession = async () => {
     try {
       const sessionId = await studyTimeService.startStudySession(user.uid, groupId);
@@ -919,33 +963,47 @@ function Timer({ user, onBack, groupId }) {
     }
   };
 
+  // تم إصلاح هذه الدالة لمنع مضاعفة النقاط
   const stopAndSaveSession = async () => {
     if (!currentSessionId || sessionTime === 0) return;
     
     try {
-      const pointsEarned = Math.floor(sessionTime / 30);
-      await studyTimeService.endStudySession(currentSessionId, sessionTime, pointsEarned);
-      
-      const newTotal = totalStudyTime + sessionTime;
-      setTotalStudyTime(newTotal);
-      
-      const newPoints = points + pointsEarned;
-      setPoints(newPoints);
-      
-      const recentSessions = await studyTimeService.getUserRecentSessions(user.uid, 10);
-      setStudySessions(recentSessions);
-      
-      const stats = await studyTimeService.getUserStudyStats(user.uid);
-      setStudyStats(stats);
-      
+      // إيقاف تحديث النقاط التلقائي أولاً
       setIsRunning(false);
-      setCurrentSessionId(null);
+      
+      const result = await studyTimeService.endStudySession(currentSessionId, sessionTime);
+      
+      if (result.success) {
+        const pointsEarned = result.pointsEarned;
+        
+        // تحديث الإجمالي محليًا
+        const newTotal = totalStudyTime + sessionTime;
+        setTotalStudyTime(newTotal);
+        
+        // تحديث النقاط (بدون مضاعفة)
+        const newPoints = points + pointsEarned;
+        setPoints(newPoints);
+        
+        // تحديث جلسات الدراسة
+        const recentSessions = await studyTimeService.getUserRecentSessions(user.uid, 10);
+        setStudySessions(recentSessions);
+        
+        // تحديث الإحصائيات
+        const stats = await studyTimeService.getUserStudyStats(user.uid);
+        setStudyStats(stats);
+        
+        setCurrentSessionId(null);
+        showNotification(`تم حفظ ${formatTimeDetailed(sessionTime)} من الدراسة (+${pointsEarned} نقطة)`);
+      }
     } catch (error) {
       console.error("Error stopping session:", error);
       showNotification("حدث خطأ في حفظ الجلسة");
+      // إعادة التشغيل إذا فشل الحفظ
+      setIsRunning(true);
     }
   };
 
+  // تحديث الجلسة النشطة في Firebase كل دقيقة
   useEffect(() => {
     let interval;
     
@@ -954,7 +1012,8 @@ function Timer({ user, onBack, groupId }) {
         setSessionTime(prev => {
           const newTime = prev + 1;
           
-          if (newTime % 30 === 0) {
+          // تحديث الوقت في Firebase كل دقيقة لتقليل القراءات
+          if (newTime % 60 === 0) {
             studyTimeService.updateActiveSession(currentSessionId, newTime);
           }
           
@@ -966,19 +1025,25 @@ function Timer({ user, onBack, groupId }) {
     return () => clearInterval(interval);
   }, [isRunning, currentSessionId]);
 
+  // إزالة المضاعفة - فقط تحديث للتأثيرات البصرية
   useEffect(() => {
     if (isRunning && sessionTime > 0 && sessionTime % 30 === 0 && sessionTime !== lastUpdateTime) {
-      const pointsEarned = activeEffects.some(e => e.type === 'double_points') ? 2 : 1;
-      const newPoints = points + pointsEarned;
-      setPoints(newPoints);
-      setLastUpdateTime(sessionTime);
-      
-      const newLevelData = calculateLevel(newPoints);
-      if (newLevelData.currentLevel > currentLevel) {
-        showNotification(`🎉 تقدمت للمستوى ${newLevelData.currentLevel}!`);
+      // فقط تحديث الـ UI للتأثيرات
+      if (activeEffects.some(e => e.type === 'double_points')) {
+        setLastUpdateTime(sessionTime);
       }
     }
-  }, [sessionTime, isRunning]);
+  }, [sessionTime, isRunning, activeEffects]);
+
+  const toggleTimer = async () => {
+    if (isRunning) {
+      // إيقاف وحفظ الجلسة
+      await stopAndSaveSession();
+    } else {
+      // بدء جلسة جديدة
+      await startNewSession();
+    }
+  };
 
   const fetchGroupData = async () => {
     try {
@@ -1229,14 +1294,6 @@ function Timer({ user, onBack, groupId }) {
       }
     });
     return score;
-  };
-
-  const toggleTimer = async () => {
-    if (isRunning) {
-      await stopAndSaveSession();
-    } else {
-      await startNewSession();
-    }
   };
 
   return (
