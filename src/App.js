@@ -16,12 +16,12 @@ import {
   onSnapshot, 
   runTransaction, 
   arrayUnion,
-  writeBatch
+  writeBatch,
+  increment
 } from 'firebase/firestore';
 import './App.css';
 import AttendanceCalendar from './components/AttendanceCalendar';
 import Profile from './components/Profile';
-import HomePage from './components/HomePage';
 import { Routes, Route, useNavigate } from 'react-router-dom';
 import ExamsList from './components/exams/ExamsList';
 import ExamResults from './exams/ExamResults';
@@ -52,7 +52,7 @@ const generateUniqueCode = () => {
   return code;
 };
 
-// خدمة إدارة المستخدمين
+// خدمة إدارة المستخدمين المدمجة
 const userService = {
   createOrUpdateUser: async (user) => {
     try {
@@ -60,7 +60,6 @@ const userService = {
       const userSnap = await getDoc(userRef);
       
       if (!userSnap.exists()) {
-        // إنشاء مستخدم جديد مع كود مميز
         const uniqueCode = generateUniqueCode();
         await setDoc(userRef, {
           uid: user.uid,
@@ -71,11 +70,11 @@ const userService = {
           hasVerifiedCode: false,
           createdAt: new Date(),
           points: 0,
-          level: 1
+          level: 1,
+          totalStudyTime: 0
         });
         return { uniqueCode, hasVerifiedCode: false };
       } else {
-        // المستخدم موجود بالفعل
         return {
           uniqueCode: userSnap.data().uniqueCode,
           hasVerifiedCode: userSnap.data().hasVerifiedCode || false
@@ -133,47 +132,6 @@ const userService = {
     }
   },
 
-  verifyUserCode: async (userId, code) => {
-    try {
-      const codeRef = doc(db, "userCodes", userId);
-      const codeSnap = await getDoc(codeRef);
-      
-      if (!codeSnap.exists()) {
-        return { verified: false, message: "الكود غير موجود" };
-      }
-      
-      const codeData = codeSnap.data();
-      
-      if (codeData.verified) {
-        return { verified: true, message: "تم التحقق مسبقاً" };
-      }
-      
-      if (codeData.code === code) {
-        await updateDoc(codeRef, {
-          verified: true,
-          verifiedAt: new Date()
-        });
-        
-        // تحديث حالة التحقق في مستند المستخدم
-        await updateDoc(doc(db, "users", userId), {
-          hasVerifiedCode: true
-        });
-        
-        return { verified: true, message: "تم التحقق بنجاح" };
-      } else {
-        // زيادة عدد المحاولات
-        await updateDoc(codeRef, {
-          attempts: codeData.attempts + 1
-        });
-        
-        return { verified: false, message: "الكود غير صحيح" };
-      }
-    } catch (error) {
-      console.error("Error verifying code:", error);
-      throw error;
-    }
-  },
-
   getCodeInfo: async (userId) => {
     try {
       const codeRef = doc(db, "userCodes", userId);
@@ -204,7 +162,369 @@ const userService = {
       console.error("Error checking code verification:", error);
       throw error;
     }
+  },
+
+  updateTotalStudyTime: async (userId, additionalTime) => {
+    try {
+      const userRef = doc(db, "users", userId);
+      await updateDoc(userRef, {
+        totalStudyTime: increment(additionalTime)
+      });
+    } catch (error) {
+      console.error("Error updating total study time:", error);
+    }
+  },
+
+  getTotalStudyTime: async (userId) => {
+    try {
+      const userRef = doc(db, "users", userId);
+      const userSnap = await getDoc(userRef);
+      
+      if (!userSnap.exists()) {
+        return 0;
+      }
+      
+      return userSnap.data().totalStudyTime || 0;
+    } catch (error) {
+      console.error("Error getting total study time:", error);
+      return 0;
+    }
+  },
+
+  updateGroupStudyTime: async (userId, groupId, additionalTime) => {
+    try {
+      const sessionRef = doc(db, "studySessions", `${userId}_${groupId}`);
+      const sessionSnap = await getDoc(sessionRef);
+      
+      if (!sessionSnap.exists()) {
+        await setDoc(sessionRef, {
+          userId,
+          groupId,
+          totalTime: additionalTime,
+          lastUpdated: new Date(),
+          createdAt: new Date(),
+          sessionsCount: 1
+        });
+      } else {
+        await updateDoc(sessionRef, {
+          totalTime: increment(additionalTime),
+          lastUpdated: new Date(),
+          sessionsCount: increment(1)
+        });
+      }
+      
+      await addDoc(collection(db, "detailedSessions"), {
+        userId,
+        groupId,
+        duration: additionalTime,
+        timestamp: new Date(),
+        pointsEarned: Math.floor(additionalTime / 30)
+      });
+      
+      return true;
+    } catch (error) {
+      console.error("Error updating group study time:", error);
+      throw error;
+    }
+  },
+
+  getGroupStudyTime: async (userId, groupId) => {
+    try {
+      const sessionRef = doc(db, "studySessions", `${userId}_${groupId}`);
+      const sessionSnap = await getDoc(sessionRef);
+      
+      if (!sessionSnap.exists()) {
+        return 0;
+      }
+      
+      return sessionSnap.data().totalTime || 0;
+    } catch (error) {
+      console.error("Error getting group study time:", error);
+      return 0;
+    }
+  },
+
+  getDetailedSessions: async (userId, groupId, limit = 10) => {
+    try {
+      const q = query(
+        collection(db, "detailedSessions"),
+        where("userId", "==", userId),
+        where("groupId", "==", groupId)
+      );
+      
+      const querySnapshot = await getDocs(q);
+      const sessions = querySnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      
+      sessions.sort((a, b) => b.timestamp.toDate() - a.timestamp.toDate());
+      
+      return sessions.slice(0, limit);
+    } catch (error) {
+      console.error("Error getting detailed sessions:", error);
+      return [];
+    }
+  },
+
+  resetGroupStudyTime: async (userId, groupId) => {
+    try {
+      const sessionRef = doc(db, "studySessions", `${userId}_${groupId}`);
+      await updateDoc(sessionRef, {
+        totalTime: 0,
+        lastUpdated: new Date(),
+        resetAt: new Date()
+      });
+      
+      return true;
+    } catch (error) {
+      console.error("Error resetting group study time:", error);
+      throw error;
+    }
+  },
+
+  purchaseItem: async (userId, itemId, itemPrice) => {
+    try {
+      const userRef = doc(db, "users", userId);
+      const inventoryRef = doc(db, "userInventory", userId);
+      
+      await runTransaction(db, async (transaction) => {
+        const userDoc = await transaction.get(userRef);
+        const inventoryDoc = await transaction.get(inventoryRef);
+        
+        if (!userDoc.exists()) {
+          throw new Error("المستخدم غير موجود");
+        }
+        
+        const userData = userDoc.data();
+        const currentPoints = userData.points || 0;
+        
+        if (currentPoints < itemPrice) {
+          throw new Error("النقاط غير كافية");
+        }
+        
+        transaction.update(userRef, {
+          points: currentPoints - itemPrice
+        });
+        
+        const inventoryData = inventoryDoc.exists() ? inventoryDoc.data() : { items: [] };
+        const existingItems = inventoryData.items || [];
+        
+        if (!existingItems.some(item => item.id === itemId)) {
+          const newItem = {
+            id: itemId,
+            purchasedAt: new Date(),
+            expiresAt: null,
+            isActive: false
+          };
+          
+          transaction.set(inventoryRef, {
+            userId,
+            items: [...existingItems, newItem],
+            lastUpdated: new Date()
+          }, { merge: true });
+        }
+      });
+      
+      return { success: true, message: "تم الشراء بنجاح" };
+    } catch (error) {
+      console.error("Error purchasing item:", error);
+      return { success: false, message: error.message };
+    }
+  },
+
+  activateItem: async (userId, itemId, durationMinutes) => {
+    try {
+      const inventoryRef = doc(db, "userInventory", userId);
+      const activeItemsRef = doc(db, "activeItems", userId);
+      
+      await runTransaction(db, async (transaction) => {
+        const inventoryDoc = await transaction.get(inventoryRef);
+        const activeItemsDoc = await transaction.get(activeItemsRef);
+        
+        if (!inventoryDoc.exists()) {
+          throw new Error("لا يوجد مخزون للمستخدم");
+        }
+        
+        const inventoryData = inventoryDoc.data();
+        const items = inventoryData.items || [];
+        const itemIndex = items.findIndex(item => item.id === itemId);
+        
+        if (itemIndex === -1) {
+          throw new Error("العنصر غير موجود في المخزون");
+        }
+        
+        const updatedItems = [...items];
+        updatedItems[itemIndex] = {
+          ...updatedItems[itemIndex],
+          isActive: true,
+          activatedAt: new Date(),
+          expiresAt: new Date(Date.now() + durationMinutes * 60000)
+        };
+        
+        transaction.update(inventoryRef, {
+          items: updatedItems,
+          lastUpdated: new Date()
+        });
+        
+        const activeItemsData = activeItemsDoc.exists() ? activeItemsDoc.data() : { items: [] };
+        const activeItems = activeItemsData.items || [];
+        
+        const newActiveItem = {
+          id: itemId,
+          activatedAt: new Date(),
+          expiresAt: new Date(Date.now() + durationMinutes * 60000),
+          effectType: getEffectType(itemId)
+        };
+        
+        transaction.set(activeItemsRef, {
+          userId,
+          items: [...activeItems.filter(item => item.id !== itemId), newActiveItem],
+          lastUpdated: new Date()
+        }, { merge: true });
+      });
+      
+      return { success: true, message: "تم تفعيل العنصر بنجاح" };
+    } catch (error) {
+      console.error("Error activating item:", error);
+      return { success: false, message: error.message };
+    }
+  },
+
+  getActiveItems: async (userId) => {
+    try {
+      const activeItemsRef = doc(db, "activeItems", userId);
+      const activeItemsDoc = await getDoc(activeItemsRef);
+      
+      if (!activeItemsDoc.exists()) {
+        return [];
+      }
+      
+      const data = activeItemsDoc.data();
+      const now = new Date();
+      
+      const activeItems = (data.items || []).filter(item => 
+        item.expiresAt?.toDate() > now
+      );
+      
+      return activeItems;
+    } catch (error) {
+      console.error("Error getting active items:", error);
+      return [];
+    }
+  },
+
+  getInventory: async (userId) => {
+    try {
+      const inventoryRef = doc(db, "userInventory", userId);
+      const inventoryDoc = await getDoc(inventoryRef);
+      
+      if (!inventoryDoc.exists()) {
+        return [];
+      }
+      
+      return inventoryDoc.data().items || [];
+    } catch (error) {
+      console.error("Error getting inventory:", error);
+      return [];
+    }
+  },
+
+  deactivateItem: async (userId, itemId) => {
+    try {
+      const inventoryRef = doc(db, "userInventory", userId);
+      const activeItemsRef = doc(db, "activeItems", userId);
+      
+      await runTransaction(db, async (transaction) => {
+        const inventoryDoc = await transaction.get(inventoryRef);
+        const activeItemsDoc = await transaction.get(activeItemsRef);
+        
+        if (inventoryDoc.exists()) {
+          const inventoryData = inventoryDoc.data();
+          const items = inventoryData.items || [];
+          const updatedItems = items.map(item => 
+            item.id === itemId ? { ...item, isActive: false } : item
+          );
+          
+          transaction.update(inventoryRef, {
+            items: updatedItems,
+            lastUpdated: new Date()
+          });
+        }
+        
+        if (activeItemsDoc.exists()) {
+          const activeItemsData = activeItemsDoc.data();
+          const activeItems = activeItemsData.items || [];
+          const updatedActiveItems = activeItems.filter(item => item.id !== itemId);
+          
+          transaction.update(activeItemsRef, {
+            items: updatedActiveItems,
+            lastUpdated: new Date()
+          });
+        }
+      });
+      
+      return { success: true, message: "تم إلغاء تفعيل العنصر" };
+    } catch (error) {
+      console.error("Error deactivating item:", error);
+      return { success: false, message: error.message };
+    }
+  },
+
+  getUserPoints: async (userId) => {
+    try {
+      const userRef = doc(db, "users", userId);
+      const userDoc = await getDoc(userRef);
+      
+      if (!userDoc.exists()) {
+        return 0;
+      }
+      
+      return userDoc.data().points || 0;
+    } catch (error) {
+      console.error("Error getting user points:", error);
+      return 0;
+    }
+  },
+
+  subscribeToInventory: (userId, callback) => {
+    const inventoryRef = doc(db, "userInventory", userId);
+    return onSnapshot(inventoryRef, (doc) => {
+      if (doc.exists()) {
+        const data = doc.data();
+        callback(data.items || []);
+      } else {
+        callback([]);
+      }
+    });
+  },
+
+  subscribeToActiveItems: (userId, callback) => {
+    const activeItemsRef = doc(db, "activeItems", userId);
+    return onSnapshot(activeItemsRef, (doc) => {
+      if (doc.exists()) {
+        const data = doc.data();
+        const now = new Date();
+        const activeItems = (data.items || []).filter(item => 
+          item.expiresAt?.toDate() > now
+        );
+        callback(activeItems);
+      } else {
+        callback([]);
+      }
+    });
   }
+};
+
+const getEffectType = (itemId) => {
+  const effectMap = {
+    'boost': 'double_points',
+    'focus': 'speed_boost',
+    'crown': 'golden_crown',
+    'shield': 'points_shield'
+  };
+  
+  return effectMap[itemId] || null;
 };
 
 const examService = {
@@ -415,11 +735,16 @@ function Timer({ user, onBack, groupId }) {
   const [selectedExam, setSelectedExam] = useState(null);
   const [activeExamTab, setActiveExamTab] = useState('list');
   const [examLoading, setExamLoading] = useState(false);
+  const [sessionStartTime, setSessionStartTime] = useState(null);
+  const [totalStudyTime, setTotalStudyTime] = useState(0);
+  const [groupStudyTime, setGroupStudyTime] = useState(0);
+  const [lastSavedTime, setLastSavedTime] = useState(Date.now());
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [userPoints, setUserPoints] = useState(0);
 
-  // نظام المستويات المعدل
   const calculateLevel = (points) => {
-    const basePoints = 100; // النقاط المطلوبة للوصول للمستوى 2
-    const growthFactor = 1.2; // عامل النمو بين المستويات
+    const basePoints = 100;
+    const growthFactor = 1.2;
     
     if (points < basePoints) {
       return {
@@ -450,7 +775,6 @@ function Timer({ user, onBack, groupId }) {
     };
   };
 
-  // نظام الشارات المعدل
   const getBadge = (level) => {
     const badges = {
       1: { name: "المبتدئ", icon: "🌱", color: "#10B981", bgColor: "rgba(16, 185, 129, 0.1)" },
@@ -462,7 +786,6 @@ function Timer({ user, onBack, groupId }) {
       30: { name: "رائد المعرفة", icon: "🚀", color: "#06B6D4", bgColor: "rgba(6, 182, 212, 0.1)" }
     };
     
-    // إيجاد أعلى شارة مؤهلة
     const eligibleLevels = Object.keys(badges)
       .map(Number)
       .filter(lvl => level >= lvl)
@@ -473,125 +796,6 @@ function Timer({ user, onBack, groupId }) {
 
   const { currentLevel, progress, pointsToNextLevel } = calculateLevel(points);
   const currentBadge = getBadge(currentLevel);
-  const shopItems = [
-    { 
-      id: "boost", 
-      name: "دفعة النجاح", 
-      description: "يحقق ضعف النقاط لمدة 30 دقيقة",
-      price: 400, 
-      icon: "⚡", 
-      effect: "double_points", 
-      color: "var(--warning-color)",
-      bgColor: "rgba(245, 158, 11, 0.1)",
-      hoverEffect: "glow"
-    },
-    { 
-      id: "focus", 
-      name: "معزز التركيز", 
-      description: "يزيد سرعة تحصيل النقاط بنسبة 50% لمدة ساعة",
-      price: 300, 
-      icon: "🧠", 
-      effect: "speed_boost", 
-      color: "var(--primary-color)",
-      bgColor: "rgba(79, 70, 229, 0.1)",
-      hoverEffect: "pulse"
-    },
-    { 
-      id: "crown", 
-      name: "التاج الذهبي", 
-      description: "يظهر تاج ذهبي بجانب اسمك في لوحة المتصدرين",
-      price: 600, 
-      icon: "👑", 
-      effect: "golden_crown", 
-      color: "var(--warning-dark)",
-      bgColor: "rgba(217, 119, 6, 0.1)",
-      hoverEffect: "float"
-    },
-    { 
-      id: "shield", 
-      name: "حافظة النقاط", 
-      description: "يحمي نقاطك من الخسارة لمدة 24 ساعة",
-      price: 350, 
-      icon: "🛡️", 
-      effect: "points_shield", 
-      color: "var(--secondary-color)",
-      bgColor: "rgba(16, 185, 129, 0.1)",
-      hoverEffect: "shake"
-    }
-  ];
-
-  const purchaseItem = async (item) => {
-    if (points >= item.price) {
-      try {
-        await runTransaction(db, async (transaction) => {
-          const userDoc = await transaction.get(doc(db, "users", user.uid));
-          transaction.update(doc(db, "users", user.uid), {
-            points: userDoc.data().points - item.price,
-            inventory: arrayUnion(item.id)
-          });
-        });
-        
-        setPoints(prev => prev - item.price);
-        setInventory(prev => [...prev, item.id]);
-        applyItemEffect(item);
-        showNotification(`🎉 تم شراء ${item.name}!`);
-      } catch (error) {
-        console.error("Error purchasing item:", error);
-        showNotification("⚠️ حدث خطأ أثناء الشراء");
-      }
-    } else {
-      showNotification("❌ نقاطك غير كافية!");
-    }
-  };
-
-  const applyItemEffect = (item) => {
-    const effectMap = {
-      'double_points': 30 * 60 * 1000,
-      'speed_boost': 60 * 60 * 1000,
-      'golden_crown': 24 * 60 * 60 * 1000,
-      'points_shield': 24 * 60 * 60 * 1000
-    };
-    
-    if (effectMap[item.effect]) {
-      setActiveEffects(prev => [
-        ...prev,
-        {
-          type: item.effect,
-          expires: Date.now() + effectMap[item.effect],
-          itemId: item.id
-        }
-      ]);
-    }
-  };
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setActiveEffects(prev => 
-        prev.filter(effect => effect.expires > Date.now())
-      );
-    }, 60000);
-
-    return () => clearInterval(interval);
-  }, []);
-
-  const toggleDarkMode = () => {
-    const newMode = !darkMode;
-    setDarkMode(newMode);
-    document.documentElement.setAttribute('data-theme', newMode ? 'dark' : 'light');
-    localStorage.setItem('darkMode', JSON.stringify(newMode));
-    showNotification(newMode ? '🌙 تم تفعيل الوضع المظلم' : '☀️ تم تفعيل الوضع الفاتح');
-  };
-
-  const changeLanguage = (lang) => {
-    setLanguage(lang);
-    localStorage.setItem('language', lang);
-    showNotification(lang === 'ar' ? '🇸🇦 تم تغيير اللغة إلى العربية' : '🇬🇧 Language changed to English');
-  };
-
-  const showNotification = (message) => {
-    setNotification(message);
-    setTimeout(() => setNotification(null), 3000);
-  };
 
   const formatTime = (seconds) => {
     const hrs = Math.floor(seconds / 3600);
@@ -601,13 +805,81 @@ function Timer({ user, onBack, groupId }) {
     return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const addStudySession = (duration, pointsEarned) => {
+  const formatTimeDetailed = (seconds) => {
+    const hrs = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+    
+    const parts = [];
+    if (hrs > 0) parts.push(`${hrs} ساعة`);
+    if (mins > 0) parts.push(`${mins} دقيقة`);
+    if (secs > 0 || parts.length === 0) parts.push(`${secs} ثانية`);
+    
+    return parts.join(' و ');
+  };
+
+  const saveTimeToFirebase = async (timeToSave) => {
+    try {
+      setIsSyncing(true);
+      await userService.updateGroupStudyTime(user.uid, groupId, timeToSave);
+      await userService.updateTotalStudyTime(user.uid, timeToSave);
+      setLastSavedTime(Date.now());
+      return true;
+    } catch (error) {
+      console.error("Error saving time to Firebase:", error);
+      showNotification("❌ حدث خطأ في حفظ الوقت");
+      return false;
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const loadTimeFromFirebase = async () => {
+    try {
+      setIsSyncing(true);
+      const groupTime = await userService.getGroupStudyTime(user.uid, groupId);
+      setGroupStudyTime(groupTime);
+      setTime(groupTime);
+      
+      const totalTime = await userService.getTotalStudyTime(user.uid);
+      setTotalStudyTime(totalTime);
+      
+      const sessions = await userService.getDetailedSessions(user.uid, groupId, 10);
+      setStudySessions(sessions);
+      
+      return groupTime;
+    } catch (error) {
+      console.error("Error loading time from Firebase:", error);
+      showNotification("❌ حدث خطأ في تحميل الوقت");
+      return 0;
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const addStudySession = async (duration, pointsEarned) => {
     const newSession = {
       date: new Date(),
       duration,
-      pointsEarned
+      pointsEarned,
+      groupId,
+      savedToFirebase: false
     };
+    
     setStudySessions(prev => [newSession, ...prev].slice(0, 10));
+    
+    const newGroupTime = groupStudyTime + duration;
+    setGroupStudyTime(newGroupTime);
+    setTime(newGroupTime);
+    
+    const newTotalTime = totalStudyTime + duration;
+    setTotalStudyTime(newTotalTime);
+    
+    try {
+      await saveTimeToFirebase(duration);
+    } catch (error) {
+      console.error("Error saving session to Firebase:", error);
+    }
   };
 
   const updatePoints = async (newPoints) => {
@@ -660,58 +932,407 @@ function Timer({ user, onBack, groupId }) {
       setLoadingMembers(false);
     }
   };
-  
+
   useEffect(() => {
-    fetchGroupData();
+    const loadInitialData = async () => {
+      await Promise.all([
+        loadTimeFromFirebase(),
+        fetchGroupData()
+      ]);
+    };
+    
+    loadInitialData();
     
     const unsubscribe = onSnapshot(doc(db, "studyGroups", groupId), fetchGroupData);
-    return () => unsubscribe();
+    
+    return () => {
+      unsubscribe();
+      if (isRunning && sessionStartTime) {
+        const elapsedTime = Math.floor((Date.now() - sessionStartTime) / 1000);
+        if (elapsedTime > 0) {
+          saveTimeToFirebase(elapsedTime);
+        }
+      }
+    };
   }, [groupId, user.uid]);
 
   useEffect(() => {
+    const loadUserPoints = async () => {
+      try {
+        const points = await userService.getUserPoints(user.uid);
+        setUserPoints(points);
+      } catch (error) {
+        console.error("Error loading user points:", error);
+      }
+    };
+    
+    loadUserPoints();
+  }, [user.uid]);
+
+  useEffect(() => {
+    const loadInventory = async () => {
+      try {
+        const inventoryItems = await userService.getInventory(user.uid);
+        setInventory(inventoryItems);
+      } catch (error) {
+        console.error("Error loading inventory:", error);
+      }
+    };
+    
+    loadInventory();
+  }, [user.uid]);
+
+  useEffect(() => {
+    const loadActiveItems = async () => {
+      try {
+        const activeItems = await userService.getActiveItems(user.uid);
+        
+        const effects = activeItems.map(item => ({
+          type: item.effectType,
+          expires: item.expiresAt?.toDate().getTime() || Date.now(),
+          itemId: item.id,
+          isFirebase: true
+        }));
+        
+        setActiveEffects(effects);
+      } catch (error) {
+        console.error("Error loading active items:", error);
+      }
+    };
+    
+    loadActiveItems();
+  }, [user.uid]);
+
+  useEffect(() => {
+    const unsubscribeInventory = userService.subscribeToInventory(user.uid, (items) => {
+      setInventory(items);
+    });
+    
+    const unsubscribeActiveItems = userService.subscribeToActiveItems(user.uid, (items) => {
+      const effects = items.map(item => ({
+        type: item.effectType,
+        expires: item.expiresAt?.toDate().getTime() || Date.now(),
+        itemId: item.id,
+        isFirebase: true
+      }));
+      
+      setActiveEffects(effects);
+    });
+    
+    return () => {
+      unsubscribeInventory();
+      unsubscribeActiveItems();
+    };
+  }, [user.uid]);
+
+  useEffect(() => {
     let interval;
+    
     if (isRunning) {
+      setSessionStartTime(Date.now());
+      setLastSavedTime(Date.now());
+      
       interval = setInterval(() => {
         setTime(prev => {
           const newTime = prev + 1;
+          
           if (newTime % 30 === 0) {
-            const pointsEarned = activeEffects.some(e => e.type === 'double_points') ? 2 : 1;
-            setPoints(prevPoints => prevPoints + pointsEarned);
-            addStudySession(newTime, pointsEarned);
+            let pointsEarned = 1;
+            const hasDoublePoints = activeEffects.some(e => e.type === 'double_points');
+            const hasSpeedBoost = activeEffects.some(e => e.type === 'speed_boost');
+            
+            if (hasDoublePoints) pointsEarned *= 2;
+            if (hasSpeedBoost) pointsEarned = Math.ceil(pointsEarned * 1.5);
+            
+            setPoints(prevPoints => {
+              const updatedPoints = prevPoints + pointsEarned;
+              updatePoints(updatedPoints);
+              return updatedPoints;
+            });
+            addStudySession(1, pointsEarned);
           }
+          
+          if (newTime % 60 === 0 && newTime !== lastUpdateTime) {
+            saveTimeToFirebase(60);
+            setLastUpdateTime(newTime);
+          }
+          
           return newTime;
         });
       }, 1000);
-    }
-    return () => clearInterval(interval);
-  }, [isRunning, activeEffects]);
-
-  useEffect(() => {
-    if (isRunning && time > 0 && time % 30 === 0 && time !== lastUpdateTime) {
-      const newPoints = points + (activeEffects.some(e => e.type === 'double_points') ? 2 : 1);
-      setPoints(newPoints);
-      updatePoints(newPoints);
-      setLastUpdateTime(time);
+    } else if (sessionStartTime) {
+      const elapsedTime = Math.floor((Date.now() - sessionStartTime) / 1000);
       
-      const newLevelData = calculateLevel(newPoints);
-      if (newLevelData.currentLevel > currentLevel) {
-        showNotification(`🎉 تقدمت للمستوى ${newLevelData.currentLevel}!`);
+      if (elapsedTime > 0) {
+        const newGroupTime = groupStudyTime + elapsedTime;
+        setGroupStudyTime(newGroupTime);
+        setTime(newGroupTime);
+        
+        const newTotalTime = totalStudyTime + elapsedTime;
+        setTotalStudyTime(newTotalTime);
+        
+        saveTimeToFirebase(elapsedTime);
+        addStudySession(elapsedTime, 0);
       }
+      
+      setSessionStartTime(null);
     }
-  }, [time, isRunning]);
-
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        fetchGroupData();
+    
+    return () => {
+      if (interval) {
+        clearInterval(interval);
       }
     };
+  }, [isRunning, activeEffects, sessionStartTime]);
 
+  useEffect(() => {
+    const handleBeforeUnload = async () => {
+      if (isRunning && sessionStartTime) {
+        const elapsedTime = Math.floor((Date.now() - sessionStartTime) / 1000);
+        if (elapsedTime > 0) {
+          await saveTimeToFirebase(elapsedTime);
+        }
+      }
+    };
+    
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        if (isRunning && sessionStartTime) {
+          const elapsedTime = Math.floor((Date.now() - sessionStartTime) / 1000);
+          if (elapsedTime > 0) {
+            saveTimeToFirebase(elapsedTime);
+          }
+        }
+      } else {
+        fetchGroupData();
+        loadTimeFromFirebase();
+      }
+    };
+    
+    window.addEventListener('beforeunload', handleBeforeUnload);
     document.addEventListener('visibilitychange', handleVisibilityChange);
+    
     return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, []);
+  }, [isRunning, time, sessionStartTime]);
+
+  useEffect(() => {
+    const autoSaveInterval = setInterval(() => {
+      if (isRunning && sessionStartTime) {
+        const elapsedTime = Math.floor((Date.now() - sessionStartTime) / 1000);
+        const timeSinceLastSave = Math.floor((Date.now() - lastSavedTime) / 1000);
+        
+        if (timeSinceLastSave >= 30 && elapsedTime > 0) {
+          saveTimeToFirebase(elapsedTime);
+        }
+      }
+    }, 10000);
+
+    return () => clearInterval(autoSaveInterval);
+  }, [isRunning, sessionStartTime, lastSavedTime]);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now();
+      setActiveEffects(prev => 
+        prev.filter(effect => {
+          if (effect.expires <= now) {
+            if (effect.isFirebase) {
+              userService.deactivateItem(user.uid, effect.itemId).catch(console.error);
+            }
+            return false;
+          }
+          return true;
+        })
+      );
+    }, 30000);
+
+    return () => clearInterval(interval);
+  }, [user.uid]);
+
+  const resetTimer = async () => {
+    if (window.confirm("هل أنت متأكد من إعادة ضبط المؤقت؟ سيتم إعادة الوقت في هذه المجموعة إلى الصفر.")) {
+      setIsRunning(false);
+      setSessionStartTime(null);
+      
+      try {
+        await userService.resetGroupStudyTime(user.uid, groupId);
+        setTime(0);
+        setGroupStudyTime(0);
+        showNotification(" تم إعادة ضبط المؤقت بنجاح");
+      } catch (error) {
+        console.error("Error resetting timer:", error);
+        showNotification("❌ حدث خطأ أثناء إعادة الضبط");
+      }
+    }
+  };
+
+  const shopItems = [
+    { 
+      id: "boost", 
+      name: "دفعة النجاح", 
+      description: "يحقق ضعف النقاط لمدة 30 دقيقة",
+      price: 400, 
+      icon: "⚡", 
+      effect: "double_points", 
+      color: "var(--warning-color)",
+      bgColor: "rgba(245, 158, 11, 0.1)",
+      hoverEffect: "glow"
+    },
+    { 
+      id: "focus", 
+      name: "معزز التركيز", 
+      description: "يزيد سرعة تحصيل النقاط بنسبة 50% لمدة ساعة",
+      price: 300, 
+      icon: "🧠", 
+      effect: "speed_boost", 
+      color: "var(--primary-color)",
+      bgColor: "rgba(79, 70, 229, 0.1)",
+      hoverEffect: "pulse"
+    },
+    { 
+      id: "crown", 
+      name: "التاج الذهبي", 
+      description: "يظهر تاج ذهبي بجانب اسمك في لوحة المتصدرين",
+      price: 600, 
+      icon: "👑", 
+      effect: "golden_crown", 
+      color: "var(--warning-dark)",
+      bgColor: "rgba(217, 119, 6, 0.1)",
+      hoverEffect: "float"
+    },
+    { 
+      id: "shield", 
+      name: "حافظة النقاط", 
+      description: "يحمي نقاطك من الخسارة لمدة 24 ساعة",
+      price: 350, 
+      icon: "🛡️", 
+      effect: "points_shield", 
+      color: "var(--secondary-color)",
+      bgColor: "rgba(16, 185, 129, 0.1)",
+      hoverEffect: "shake"
+    }
+  ];
+
+  const purchaseItem = async (item) => {
+    if (userPoints >= item.price) {
+      try {
+        const result = await userService.purchaseItem(user.uid, item.id, item.price);
+        
+        if (result.success) {
+          setUserPoints(prev => prev - item.price);
+          
+          setInventory(prev => [
+            ...prev,
+            {
+              id: item.id,
+              purchasedAt: new Date(),
+              isActive: false
+            }
+          ]);
+          
+          await activatePurchasedItem(item);
+          
+          showNotification(`🎉 تم شراء ${item.name}!`);
+        } else {
+          showNotification(`❌ ${result.message}`);
+        }
+      } catch (error) {
+        console.error("Error purchasing item:", error);
+        showNotification("⚠️ حدث خطأ أثناء الشراء");
+      }
+    } else {
+      showNotification("❌ نقاطك غير كافية!");
+    }
+  };
+
+  const activatePurchasedItem = async (item) => {
+    const durationMap = {
+      'boost': 30,
+      'focus': 60,
+      'crown': 1440,
+      'shield': 1440
+    };
+    
+    const durationMinutes = durationMap[item.id] || 30;
+    
+    try {
+      const result = await userService.activateItem(user.uid, item.id, durationMinutes);
+      
+      if (result.success) {
+        const newEffect = {
+          type: item.effect,
+          expires: Date.now() + (durationMinutes * 60000),
+          itemId: item.id,
+          isFirebase: true
+        };
+        
+        setActiveEffects(prev => [...prev, newEffect]);
+        showNotification(`✨ تم تفعيل ${item.name} لمدة ${durationMinutes} دقيقة`);
+      } else {
+        showNotification(`⚠️ ${result.message}`);
+      }
+    } catch (error) {
+      console.error("Error activating item:", error);
+      showNotification("⚠️ حدث خطأ أثناء تفعيل العنصر");
+    }
+  };
+
+  const activateFromInventory = async (itemId) => {
+    const item = shopItems.find(i => i.id === itemId);
+    if (!item) return;
+    
+    await activatePurchasedItem(item);
+  };
+
+  const deactivateItem = async (itemId) => {
+    try {
+      const result = await userService.deactivateItem(user.uid, itemId);
+      
+      if (result.success) {
+        setActiveEffects(prev => prev.filter(effect => effect.itemId !== itemId));
+        showNotification("تم إلغاء تفعيل العنصر");
+      }
+    } catch (error) {
+      console.error("Error deactivating item:", error);
+      showNotification("⚠️ حدث خطأ أثناء إلغاء التفعيل");
+    }
+  };
+
+  const getEffectDuration = (effectType) => {
+    const durationMap = {
+      'double_points': 30,
+      'speed_boost': 60,
+      'golden_crown': 1440,
+      'points_shield': 1440
+    };
+    return durationMap[effectType] || 30;
+  };
+
+  const toggleDarkMode = () => {
+    const newMode = !darkMode;
+    setDarkMode(newMode);
+    document.documentElement.setAttribute('data-theme', newMode ? 'dark' : 'light');
+    localStorage.setItem('darkMode', JSON.stringify(newMode));
+    showNotification(newMode ? '🌙 تم تفعيل الوضع المظلم' : '☀️ تم تفعيل الوضع الفاتح');
+  };
+
+  const changeLanguage = (lang) => {
+    setLanguage(lang);
+    localStorage.setItem('language', lang);
+    showNotification(lang === 'ar' ? '🇸🇦 تم تغيير اللغة إلى العربية' : '🇬🇧 Language changed to English');
+  };
+
+  const showNotification = (message) => {
+    setNotification(message);
+    setTimeout(() => setNotification(null), 3000);
+  };
+
+  const toggleMembersSidebar = () => {
+    setShowMembers(prev => !prev);
+  };
 
   useEffect(() => {
     const savedMode = JSON.parse(localStorage.getItem('darkMode'));
@@ -723,6 +1344,17 @@ function Timer({ user, onBack, groupId }) {
     const savedLang = localStorage.getItem('language') || 'ar';
     setLanguage(savedLang);
   }, []);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const randomOnline = members
+        .filter(() => Math.random() > 0.7)
+        .map(member => member.uid);
+      setOnlineUsers(randomOnline);
+    }, 10000);
+
+    return () => clearInterval(interval);
+  }, [members]);
 
   const removeMember = async (memberId) => {
     if (window.confirm(`هل أنت متأكد من حذف هذا العضو من المجموعة؟`)) {
@@ -788,27 +1420,6 @@ function Timer({ user, onBack, groupId }) {
       }
     }
   };
-
-  const resetTimer = () => {
-    setIsRunning(false);
-    setTime(0);
-    showNotification("⏱ تم إعادة ضبط المؤقت");
-  };
-
-  const toggleMembersSidebar = () => {
-    setShowMembers(prev => !prev);
-  };
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const randomOnline = members
-        .filter(() => Math.random() > 0.7)
-        .map(member => member.uid);
-      setOnlineUsers(randomOnline);
-    }, 10000);
-
-    return () => clearInterval(interval);
-  }, [members]);
 
   const handleActivateExam = async (exam) => {
     setExamLoading(true);
@@ -887,6 +1498,59 @@ function Timer({ user, onBack, groupId }) {
       }
     });
     return score;
+  };
+
+  const renderActiveEffects = () => {
+    if (activeEffects.length === 0) return null;
+    
+    return (
+      <div className="active-effects">
+        <h3>التأثيرات النشطة</h3>
+        <div className="effects-list">
+          {activeEffects.map((effect, index) => {
+            const item = shopItems.find(i => i.id === effect.itemId);
+            if (!item) return null;
+            
+            const minutesRemaining = Math.ceil((effect.expires - Date.now()) / (60 * 1000));
+            
+            return (
+              <div key={index} className="active-effect">
+                <span className="effect-icon" style={{ color: item.color }}>
+                  {item.icon}
+                </span>
+                <div className="effect-info">
+                  <span className="effect-name">{item.name}</span>
+                  <div className="effect-timer">
+                    <div className="timer-bar">
+                      <div 
+                        className="timer-fill"
+                        style={{ 
+                          width: `${(minutesRemaining / getEffectDuration(effect.type)) * 100}%`,
+                          backgroundColor: item.color
+                        }}
+                      ></div>
+                    </div>
+                    <span className="effect-time">
+                      {minutesRemaining > 60 
+                        ? `${Math.floor(minutesRemaining / 60)} ساعة ${minutesRemaining % 60} دقيقة`
+                        : `${minutesRemaining} دقيقة`
+                      }
+                    </span>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => deactivateItem(effect.itemId)}
+                  className="cancel-effect"
+                  title="إلغاء التأثير"
+                >
+                  ✕
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -1041,6 +1705,11 @@ function Timer({ user, onBack, groupId }) {
             <div className="time-display">
               <h2>وقت المذاكرة</h2>
               <div className="time">{formatTime(time)}</div>
+              <div className="time-info">
+                <p className="session-info"> وقت هذه المجموعة: {formatTimeDetailed(time)}</p>
+                <p className="session-info"> إجمالي وقت الدراسة: {formatTimeDetailed(totalStudyTime)}</p>
+                {isSyncing && <p className="syncing-info"> جاري المزامنة مع السحابة...</p>}
+              </div>
             </div>
             
             <div className="stats-display">
@@ -1075,14 +1744,16 @@ function Timer({ user, onBack, groupId }) {
               <button 
                 onClick={() => setIsRunning(!isRunning)}
                 className={`control-button ${isRunning ? 'pause-button' : 'start-button'}`}
-                disabled={bannedMembers.includes(user.uid)}
+                disabled={bannedMembers.includes(user.uid) || isSyncing}
               >
                 {isRunning ? ' إيقاف' : ' بدء'}
+                {isSyncing && ' ...'}
               </button>
               
               <button 
                 onClick={resetTimer}
                 className="control-button reset-button"
+                disabled={isSyncing}
               >
                  إعادة تعيين
               </button>
@@ -1093,31 +1764,18 @@ function Timer({ user, onBack, groupId }) {
               >
                 {showMembers ? ' إخفاء الأعضاء' : ' عرض الأعضاء'}
               </button>
+              
+              <button
+                onClick={() => loadTimeFromFirebase()}
+                className="control-button refresh-button"
+                disabled={isSyncing}
+                title="تحديث البيانات من السحابة"
+              >
+                 تحديث
+              </button>
             </div>
 
-            {activeEffects.length > 0 && (
-              <div className="active-effects">
-                <h3>التأثيرات النشطة</h3>
-                <div className="effects-list">
-                  {activeEffects.map((effect, index) => {
-                    const item = shopItems.find(i => i.id === effect.itemId);
-                    if (!item) return null;
-                    
-                    return (
-                      <div key={index} className="active-effect">
-                        <span className="effect-icon" style={{ color: item.color }}>
-                          {item.icon}
-                        </span>
-                        <span className="effect-name">{item.name}</span>
-                        <span className="effect-time">
-                          {Math.ceil((effect.expires - Date.now()) / (60 * 1000))} دقائق متبقية
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
+            {renderActiveEffects()}
           </div>
         )}
         
@@ -1131,6 +1789,13 @@ function Timer({ user, onBack, groupId }) {
               />
               <h2>{user.displayName}</h2>
               <p className="user-level">المستوى {currentLevel}</p>
+              <div className="sync-status">
+                {isSyncing ? (
+                  <span className="syncing"> جاري المزامنة...</span>
+                ) : (
+                  <span className="synced"> متزامن مع السحابة</span>
+                )}
+              </div>
             </div>
             
             <div className="profile-stats">
@@ -1141,7 +1806,12 @@ function Timer({ user, onBack, groupId }) {
               
               <div className="stat-row">
                 <span className="stat-label">إجمالي وقت الدراسة:</span>
-                <span className="stat-value">{Math.floor(time / 3600)} ساعة</span>
+                <span className="stat-value">{formatTimeDetailed(totalStudyTime)}</span>
+              </div>
+              
+              <div className="stat-row">
+                <span className="stat-label">وقت هذه المجموعة:</span>
+                <span className="stat-value">{formatTimeDetailed(time)}</span>
               </div>
               
               <div className="stat-row">
@@ -1157,19 +1827,36 @@ function Timer({ user, onBack, groupId }) {
                   {studySessions.map((session, index) => (
                     <div key={index} className="session-item">
                       <span className="session-date">
-                        {new Date(session.date).toLocaleDateString()}
+                        {new Date(session.date || session.timestamp?.toDate()).toLocaleDateString('ar-SA', {
+                          weekday: 'short',
+                          year: 'numeric',
+                          month: 'short',
+                          day: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        })}
                       </span>
                       <span className="session-duration">
-                        {formatTime(session.duration)}
+                        {formatTimeDetailed(session.duration)}
                       </span>
                       <span className="session-points">
-                        +{session.pointsEarned} نقطة
+                        +{session.pointsEarned || 0} نقطة
                       </span>
                     </div>
                   ))}
                 </div>
               </div>
             )}
+            
+            <div className="profile-actions">
+              <button 
+                onClick={() => loadTimeFromFirebase()} 
+                className="refresh-button"
+                disabled={isSyncing}
+              >
+                 تحديث البيانات من السحابة
+              </button>
+            </div>
           </div>
         )}
         
@@ -1178,41 +1865,112 @@ function Timer({ user, onBack, groupId }) {
             <h2>متجر النقاط</h2>
             <div className="balance-display">
               <span>رصيدك الحالي:</span>
-              <span className="points-balance">{points} نقطة</span>
+              <span className="points-balance">{userPoints} نقطة</span>
             </div>
-            <div className="shop-items">
-              {shopItems.map(item => (
-                <div 
-                  key={item.id} 
-                  className={`shop-item ${hoveredItem === item.id ? 'hovered' : ''} ${hoveredItem === item.id ? item.hoverEffect : ''}`}
-                  style={{ 
-                    borderColor: item.color,
-                    backgroundColor: item.bgColor,
-                  }}
-                  onMouseEnter={() => setHoveredItem(item.id)}
-                  onMouseLeave={() => setHoveredItem(null)}
-                >
-                  <div 
-                    className="item-icon" 
-                    style={{ color: item.color }}
-                  >
-                    {item.icon}
-                  </div>
-                  <h3>{item.name}</h3>
-                  <p className="item-description">{item.description}</p>
-                  <p className="item-price" style={{ color: item.color }}>
-                    {item.price} نقطة
-                  </p>
-                  <button 
-                    onClick={() => purchaseItem(item)}
-                    disabled={points < item.price}
-                    className={points < item.price ? 'disabled' : ''}
-                    style={{ backgroundColor: item.color }}
-                  >
-                    {points < item.price ? 'نقاط غير كافية' : 'شراء'}
-                  </button>
+            
+            <div className="inventory-section">
+              <h3>مخزونك</h3>
+              {inventory.length === 0 ? (
+                <p className="empty-inventory">لا توجد عناصر في المخزون</p>
+              ) : (
+                <div className="inventory-items">
+                  {inventory.map((item, index) => {
+                    const shopItem = shopItems.find(i => i.id === item.id);
+                    if (!shopItem) return null;
+                    
+                    const isActive = item.isActive || activeEffects.some(e => e.itemId === item.id);
+                    
+                    return (
+                      <div 
+                        key={index} 
+                        className={`inventory-item ${isActive ? 'active' : ''}`}
+                        style={{ 
+                          borderColor: shopItem.color,
+                          backgroundColor: shopItem.bgColor,
+                        }}
+                      >
+                        <div className="item-icon" style={{ color: shopItem.color }}>
+                          {shopItem.icon}
+                        </div>
+                        <div className="item-info">
+                          <h4>{shopItem.name}</h4>
+                          <p className="item-status">
+                            {isActive ? '🟢 مفعل' : '⚪ غير مفعل'}
+                          </p>
+                          {item.purchasedAt && (
+                            <p className="purchase-date">
+                              تم الشراء: {new Date(item.purchasedAt).toLocaleDateString('ar-SA')}
+                            </p>
+                          )}
+                        </div>
+                        <div className="item-actions">
+                          {!isActive ? (
+                            <button 
+                              onClick={() => activateFromInventory(item.id)}
+                              className="activate-button"
+                              style={{ backgroundColor: shopItem.color }}
+                            >
+                              تفعيل
+                            </button>
+                          ) : (
+                            <button 
+                              onClick={() => deactivateItem(item.id)}
+                              className="deactivate-button"
+                            >
+                              إلغاء التفعيل
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-              ))}
+              )}
+            </div>
+            
+            <div className="shop-items-section">
+              <h3>العناصر المتاحة للشراء</h3>
+              <div className="shop-items">
+                {shopItems.map(item => {
+                  const owned = inventory.some(invItem => invItem.id === item.id);
+                  
+                  return (
+                    <div 
+                      key={item.id} 
+                      className={`shop-item ${owned ? 'owned' : ''} ${hoveredItem === item.id ? 'hovered' : ''} ${hoveredItem === item.id ? item.hoverEffect : ''}`}
+                      style={{ 
+                        borderColor: item.color,
+                        backgroundColor: item.bgColor,
+                      }}
+                      onMouseEnter={() => setHoveredItem(item.id)}
+                      onMouseLeave={() => setHoveredItem(null)}
+                    >
+                      <div className="item-icon" style={{ color: item.color }}>
+                        {item.icon}
+                      </div>
+                      <h3>{item.name}</h3>
+                      <p className="item-description">{item.description}</p>
+                      <p className="item-price" style={{ color: item.color }}>
+                        {item.price} نقطة
+                      </p>
+                      {owned ? (
+                        <button className="owned-button" disabled>
+                          مملوك
+                        </button>
+                      ) : (
+                        <button 
+                          onClick={() => purchaseItem(item)}
+                          disabled={userPoints < item.price}
+                          className={userPoints < item.price ? 'disabled' : ''}
+                          style={{ backgroundColor: item.color }}
+                        >
+                          {userPoints < item.price ? 'نقاط غير كافية' : 'شراء'}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           </div>
         )}
@@ -1534,11 +2292,9 @@ function App() {
           hasVerifiedCode: userData.hasVerifiedCode || false
         });
         
-        // إنشاء كود التحقق للمستخدم
         const codeResult = await userService.createUserCode(result.user.uid);
         console.log('User code:', codeResult.code);
         
-        // التحقق من حالة التحقق للمستخدم
         const isVerified = await userService.checkCodeVerification(result.user.uid);
         if (isVerified) {
           setCodeVerified(true);
@@ -1689,10 +2445,8 @@ function App() {
         setJoinCode('');
         showNotification('تم التحقق بنجاح!');
         
-        // تمكين الميزات الإضافية للمستخدم
         enablePremiumFeatures(user.uid);
         
-        // الحصول على معلومات الكود
         const codeInfo = await userService.getCodeInfo(user.uid);
         console.log('Code info:', codeInfo);
       } else {
@@ -1712,12 +2466,11 @@ function App() {
     if (remainingAttempts <= 0) {
       setShowCodeModal(false);
       showNotification('لقد استنفذت جميع محاولات التحقق. يرجى المحاولة لاحقاً');
-      setCodeAttempts(3); // إعادة تعيين المحاولات
+      setCodeAttempts(3);
     }
   };
 
   const enablePremiumFeatures = (userId) => {
-    // هنا يمكنك إضافة أي منطق لتمكين الميزات المميزة للمستخدم
     console.log(`تم تمكين الميزات المميزة للمستخدم ${userId}`);
   };
 
