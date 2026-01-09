@@ -17,6 +17,8 @@ import {
   runTransaction, 
   arrayUnion,
   writeBatch,
+  serverTimestamp,
+  Timestamp,
   increment
 } from 'firebase/firestore';
 import './App.css';
@@ -72,7 +74,9 @@ const userService = {
           hasVerifiedCode: false,
           createdAt: new Date(),
           points: 0,
-          level: 1
+          level: 1,
+          inventory: [],
+          activeEffects: []
         });
         return { uniqueCode, hasVerifiedCode: false };
       } else {
@@ -134,7 +138,8 @@ const userService = {
     }
   },
 
-  verifyUserCode2: async (userId, code) => {
+  // تحقق مخزن في collection userCodes
+  verifyUserCode: async (userId, code) => {
     try {
       const codeRef = doc(db, "userCodes", userId);
       const codeSnap = await getDoc(codeRef);
@@ -203,7 +208,7 @@ const userService = {
       return userSnap.data().hasVerifiedCode || false;
     } catch (error) {
       console.error("Error checking code verification:", error);
-      throw error;
+      return false;
     }
   }
 };
@@ -296,7 +301,7 @@ const examService = {
       });
     } catch (error) {
       console.error("Error deactivating exam:", error);
-      throw error;
+        throw error;
     }
   },
 
@@ -391,51 +396,12 @@ const examService = {
   }
 };
 
-// خدمة الوقت لكل مجموعة
-const timeService = {
-  // الحصول على الوقت المحفوظ للمستخدم في مجموعة معينة
-  getUserTimeInGroup: async (groupId, userId) => {
-    try {
-      const groupDoc = await getDoc(doc(db, "studyGroups", groupId));
-      if (groupDoc.exists()) {
-        const groupData = groupDoc.data();
-        return groupData.userTimes?.[userId] || 0;
-      }
-      return 0;
-    } catch (error) {
-      console.error("Error getting user time:", error);
-      return 0;
-    }
-  },
-
-  // تحديث الوقت في Firestore
-  updateUserTimeInGroup: async (groupId, userId, timeInSeconds) => {
-    try {
-      await updateDoc(doc(db, "studyGroups", groupId), {
-        [`userTimes.${userId}`]: timeInSeconds,
-        lastUpdated: new Date()
-      });
-      return true;
-    } catch (error) {
-      console.error("Error updating user time:", error);
-      return false;
-    }
-  },
-
-  // زيادة الوقت بشكل مستمر
-  incrementUserTime: async (groupId, userId, secondsToAdd) => {
-    try {
-      await updateDoc(doc(db, "studyGroups", groupId), {
-        [`userTimes.${userId}`]: increment(secondsToAdd)
-      });
-      return true;
-    } catch (error) {
-      console.error("Error incrementing user time:", error);
-      return false;
-    }
-  }
-};
-
+/* ============================
+   Timer component (معدل)
+   - يحفظ في: studyGroups/{groupId}/userTimers/{userId}
+   - الحقول: totalSeconds, isRunning, lastStartAt, updatedAt
+   - الحساب: الوقت الحالي = totalSeconds + (now - lastStartAt) إذا كان قيد التشغيل
+   ============================ */
 function Timer({ user, onBack, groupId }) {
   const [isRunning, setIsRunning] = useState(false);
   const [time, setTime] = useState(0);
@@ -461,67 +427,12 @@ function Timer({ user, onBack, groupId }) {
   const [selectedExam, setSelectedExam] = useState(null);
   const [activeExamTab, setActiveExamTab] = useState('list');
   const [examLoading, setExamLoading] = useState(false);
-  const [totalStudyTime, setTotalStudyTime] = useState(0); // إجمالي وقت الدراسة
-  const [timeUpdateInterval, setTimeUpdateInterval] = useState(null);
 
-  // نظام المستويات المعدل
-  const calculateLevel = (points) => {
-    const basePoints = 100; // النقاط المطلوبة للوصول للمستوى 2
-    const growthFactor = 1.2; // عامل النمو بين المستويات
-    
-    if (points < basePoints) {
-      return {
-        currentLevel: 1,
-        nextLevelPoints: basePoints,
-        progress: (points / basePoints) * 100,
-        pointsToNextLevel: basePoints - points
-      };
-    }
+  const timerRef = doc(db, "studyGroups", groupId, "userTimers", user.uid);
+  const userDocRef = doc(db, "users", user.uid);
+  const groupDocRef = doc(db, "studyGroups", groupId);
 
-    let level = 2;
-    let requiredPoints = Math.floor(basePoints * growthFactor);
-    let totalPointsNeeded = basePoints + requiredPoints;
-    
-    while (points >= totalPointsNeeded) {
-      level++;
-      requiredPoints = Math.floor(requiredPoints * growthFactor);
-      totalPointsNeeded += requiredPoints;
-    }
-    
-    const pointsForCurrentLevel = points - (totalPointsNeeded - requiredPoints);
-    
-    return {
-      currentLevel: level,
-      nextLevelPoints: requiredPoints,
-      progress: (pointsForCurrentLevel / requiredPoints) * 100,
-      pointsToNextLevel: requiredPoints - pointsForCurrentLevel
-    };
-  };
-
-  // نظام الشارات المعدل
-  const getBadge = (level) => {
-    const badges = {
-      1: { name: "المبتدئ", icon: "🌱", color: "#10B981", bgColor: "rgba(16, 185, 129, 0.1)" },
-      5: { name: "المتعلم", icon: "📚", color: "#3B82F6", bgColor: "rgba(59, 130, 246, 0.1)" },
-      10: { name: "المجتهد", icon: "🎓", color: "#F59E0B", bgColor: "rgba(245, 158, 11, 0.1)" },
-      15: { name: "الخبير", icon: "🔍", color: "#8B5CF6", bgColor: "rgba(139, 92, 246, 0.1)" },
-      20: { name: "المحترف", icon: "🏅", color: "#EC4899", bgColor: "rgba(236, 72, 153, 0.1)" },
-      25: { name: "الأسطورة", icon: "🏆", color: "#F97316", bgColor: "rgba(249, 115, 22, 0.1)" },
-      30: { name: "رائد المعرفة", icon: "🚀", color: "#06B6D4", bgColor: "rgba(6, 182, 212, 0.1)" }
-    };
-    
-    // إيجاد أعلى شارة مؤهلة
-    const eligibleLevels = Object.keys(badges)
-      .map(Number)
-      .filter(lvl => level >= lvl)
-      .sort((a, b) => b - a);
-    
-    return badges[eligibleLevels[0]] || badges[1];
-  };
-
-  const { currentLevel, progress, pointsToNextLevel } = calculateLevel(points);
-  const currentBadge = getBadge(currentLevel);
-  
+  // shop items (كما في كودك الأصلي)
   const shopItems = [
     { 
       id: "boost", 
@@ -530,7 +441,6 @@ function Timer({ user, onBack, groupId }) {
       price: 400, 
       icon: "⚡", 
       effect: "double_points", 
-      duration: 30 * 60 * 1000,
       color: "var(--warning-color)",
       bgColor: "rgba(245, 158, 11, 0.1)",
       hoverEffect: "glow"
@@ -542,7 +452,6 @@ function Timer({ user, onBack, groupId }) {
       price: 300, 
       icon: "🧠", 
       effect: "speed_boost", 
-      duration: 60 * 60 * 1000,
       color: "var(--primary-color)",
       bgColor: "rgba(79, 70, 229, 0.1)",
       hoverEffect: "pulse"
@@ -554,7 +463,6 @@ function Timer({ user, onBack, groupId }) {
       price: 600, 
       icon: "👑", 
       effect: "golden_crown", 
-      duration: 24 * 60 * 60 * 1000,
       color: "var(--warning-dark)",
       bgColor: "rgba(217, 119, 6, 0.1)",
       hoverEffect: "float"
@@ -566,87 +474,17 @@ function Timer({ user, onBack, groupId }) {
       price: 350, 
       icon: "🛡️", 
       effect: "points_shield", 
-      duration: 24 * 60 * 60 * 1000,
       color: "var(--secondary-color)",
       bgColor: "rgba(16, 185, 129, 0.1)",
       hoverEffect: "shake"
     }
   ];
 
-  const purchaseItem = async (item) => {
-    if (points >= item.price) {
-      try {
-        await runTransaction(db, async (transaction) => {
-          const userDoc = await transaction.get(doc(db, "users", user.uid));
-          if (!userDoc.exists()) throw new Error("المستخدم غير موجود");
-          
-          const userData = userDoc.data();
-          const newPoints = userData.points - item.price;
-          
-          if (newPoints < 0) {
-            throw new Error("النقاط غير كافية");
-          }
-          
-          transaction.update(doc(db, "users", user.uid), {
-            points: newPoints,
-            inventory: arrayUnion({
-              itemId: item.id,
-              name: item.name,
-              purchasedAt: new Date(),
-              expiresAt: new Date(Date.now() + item.duration)
-            })
-          });
-        });
-        
-        setPoints(prev => prev - item.price);
-        applyItemEffect(item);
-        showNotification(`🎉 تم شراء ${item.name}!`);
-        
-        // تحديث نقاط المجموعة أيضاً
-        await updatePoints(points - item.price);
-      } catch (error) {
-        console.error("Error purchasing item:", error);
-        showNotification(`❌ ${error.message || "حدث خطأ أثناء الشراء"}`);
-      }
-    } else {
-      showNotification("❌ نقاطك غير كافية!");
-    }
-  };
-
-  const applyItemEffect = (item) => {
-    setActiveEffects(prev => [
-      ...prev,
-      {
-        type: item.effect,
-        expires: Date.now() + item.duration,
-        itemId: item.id,
-        name: item.name
-      }
-    ]);
-  };
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setActiveEffects(prev => 
-        prev.filter(effect => effect.expires > Date.now())
-      );
-    }, 60000);
-
-    return () => clearInterval(interval);
-  }, []);
-
-  const toggleDarkMode = () => {
-    const newMode = !darkMode;
-    setDarkMode(newMode);
-    document.documentElement.setAttribute('data-theme', newMode ? 'dark' : 'light');
-    localStorage.setItem('darkMode', JSON.stringify(newMode));
-    showNotification(newMode ? '🌙 تم تفعيل الوضع المظلم' : '☀️ تم تفعيل الوضع الفاتح');
-  };
-
-  const changeLanguage = (lang) => {
-    setLanguage(lang);
-    localStorage.setItem('language', lang);
-    showNotification(lang === 'ar' ? '🇸🇦 تم تغيير اللغة إلى العربية' : '🇬🇧 Language changed to English');
+  const effectDurations = {
+    'double_points': 30 * 60 * 1000,
+    'speed_boost': 60 * 60 * 1000,
+    'golden_crown': 24 * 60 * 60 * 1000,
+    'points_shield': 24 * 60 * 60 * 1000
   };
 
   const showNotification = (message) => {
@@ -654,86 +492,64 @@ function Timer({ user, onBack, groupId }) {
     setTimeout(() => setNotification(null), 3000);
   };
 
-  const formatTime = (seconds) => {
-    const hrs = Math.floor(seconds / 3600);
-    const mins = Math.floor((seconds % 3600) / 60);
-    const secs = seconds % 60;
-    
-    return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  };
-
-  const formatTimeReadable = (seconds) => {
-    const hrs = Math.floor(seconds / 3600);
-    const mins = Math.floor((seconds % 3600) / 60);
-    const secs = seconds % 60;
-    
-    const parts = [];
-    if (hrs > 0) parts.push(`${hrs} ساعة`);
-    if (mins > 0) parts.push(`${mins} دقيقة`);
-    if (secs > 0 || parts.length === 0) parts.push(`${secs} ثانية`);
-    
-    return parts.join(' و ');
-  };
-
-  const addStudySession = (duration, pointsEarned) => {
-    const newSession = {
-      date: new Date(),
-      duration,
-      pointsEarned
-    };
-    setStudySessions(prev => [newSession, ...prev].slice(0, 10));
-  };
-
-  const updatePoints = async (newPoints) => {
-    try {
-      const groupDoc = await getDoc(doc(db, "studyGroups", groupId));
-      if (groupDoc.exists() && !groupDoc.data().bannedMembers?.includes(user.uid)) {
-        await updateDoc(doc(db, "studyGroups", groupId), {
-          [`userPoints.${user.uid}`]: newPoints
-        });
-      }
-    } catch (error) {
-      console.error("Error updating points:", error);
-    }
-  };
-
-  // تحديث الوقت في Firestore كل 5 ثواني
-  const updateTimeInFirestore = async () => {
-    if (isRunning && time > 0) {
-      await timeService.updateUserTimeInGroup(groupId, user.uid, time);
-    }
-  };
-
-  // تحديث الوقت في Firestore كل 5 ثواني أثناء التشغيل
+  // تحميل بيانات المؤقت من Firestore ومراقبتها
   useEffect(() => {
-    if (isRunning) {
-      const interval = setInterval(() => {
-        if (time > 0) {
-          timeService.updateUserTimeInGroup(groupId, user.uid, time);
-        }
-      }, 5000); // تحديث كل 5 ثواني
-      
-      return () => clearInterval(interval);
-    }
-  }, [isRunning, time, groupId, user.uid]);
+    const unsub = onSnapshot(timerRef, (snap) => {
+      if (!snap.exists()) {
+        // إنشاء المستند الابتدائي إن لم يوجد
+        setDoc(timerRef, {
+          totalSeconds: 0,
+          isRunning: false,
+          lastStartAt: null,
+          updatedAt: serverTimestamp()
+        }).catch(err => console.error('setDoc timer init err', err));
+        setTime(0);
+        setIsRunning(false);
+        return;
+      }
 
+      const data = snap.data();
+      let total = data.totalSeconds || 0;
+
+      if (data.isRunning && data.lastStartAt) {
+        // lastStartAt قد يكون Timestamp
+        const last = data.lastStartAt;
+        const lastMs = last.toDate ? last.toDate().getTime() : new Date(last).getTime();
+        const diff = Math.floor((Date.now() - lastMs) / 1000);
+        total += diff;
+      }
+
+      setTime(total);
+      setIsRunning(!!data.isRunning);
+    });
+
+    return () => unsub();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groupId, user.uid]);
+
+  // عرض الوقت محليًا كل ثانية أثناء التشغيل لتحسين الاستجابة
+  useEffect(() => {
+    let interval;
+    if (isRunning) {
+      interval = setInterval(() => {
+        setTime(t => t + 1);
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [isRunning]);
+
+  // جلب بيانات الجروب (الأعضاء، النقاط، الخ)
   const fetchGroupData = async () => {
     try {
       setLoadingMembers(true);
-      const groupDoc = await getDoc(doc(db, "studyGroups", groupId));
+      const groupDoc = await getDoc(groupDocRef);
       if (groupDoc.exists()) {
         const groupData = groupDoc.data();
         setIsCreator(groupData.creator === user.uid);
         setBannedMembers(groupData.bannedMembers || []);
         
-        // تحميل نقاط المستخدم
         const userPoints = groupData.userPoints?.[user.uid] || 0;
         setPoints(userPoints);
-        
-        // تحميل وقت المستخدم المحفوظ
-        const userTime = groupData.userTimes?.[user.uid] || 0;
-        setTime(userTime);
-        setTotalStudyTime(userTime);
         
         if (groupData.members) {
           const membersPromises = groupData.members.map(async (uid) => {
@@ -743,8 +559,7 @@ function Timer({ user, onBack, groupId }) {
                 uid,
                 name: userDoc.data().displayName,
                 photoURL: userDoc.data().photoURL,
-                points: groupData.userPoints?.[uid] || 0,
-                studyTime: groupData.userTimes?.[uid] || 0
+                points: groupData.userPoints?.[uid] || 0
               };
             }
             return null;
@@ -761,103 +576,255 @@ function Timer({ user, onBack, groupId }) {
       setLoadingMembers(false);
     }
   };
-  
+
   useEffect(() => {
     fetchGroupData();
-    
-    const unsubscribe = onSnapshot(doc(db, "studyGroups", groupId), fetchGroupData);
-    return () => unsubscribe();
+    const unsub = onSnapshot(groupDocRef, fetchGroupData);
+    return () => unsub();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groupId, user.uid]);
 
+  // استمع لتحديثات بيانات المستخدم (inventory, activeEffects) من Firestore
   useEffect(() => {
-    let interval;
-    if (isRunning) {
-      interval = setInterval(() => {
-        setTime(prev => {
-          const newTime = prev + 1;
-          
-          // إضافة النقاط كل 30 ثانية
-          if (newTime % 30 === 0) {
-            let pointsEarned = 1;
-            
-            // تأثير ضعف النقاط
-            if (activeEffects.some(e => e.type === 'double_points')) {
-              pointsEarned *= 2;
-            }
-            
-            // تأثير زيادة السرعة
-            if (activeEffects.some(e => e.type === 'speed_boost')) {
-              pointsEarned = Math.ceil(pointsEarned * 1.5);
-            }
-            
-            const newPoints = points + pointsEarned;
-            setPoints(newPoints);
-            updatePoints(newPoints);
-            addStudySession(newTime, pointsEarned);
-            
-            const newLevelData = calculateLevel(newPoints);
-            if (newLevelData.currentLevel > currentLevel) {
-              showNotification(`🎉 تقدمت للمستوى ${newLevelData.currentLevel}!`);
-            }
-          }
-          
-          return newTime;
+    const unsub = onSnapshot(userDocRef, (snap) => {
+      if (!snap.exists()) return;
+      const data = snap.data();
+      setInventory(data.inventory || []);
+      // فلتر التأثيرات المنتهية
+      const now = new Date();
+      const effects = (data.activeEffects || []).filter(e => {
+        if (!e.expiresAt) return false;
+        const ex = e.expiresAt.toDate ? e.expiresAt.toDate() : new Date(e.expiresAt);
+        return ex.getTime() > Date.now();
+      });
+      setActiveEffects(effects);
+    });
+
+    return () => unsub();
+  }, [user.uid]);
+
+  // تحديث نقاط المستخدم في مستند الجروب
+  const updatePoints = async (newPoints) => {
+    try {
+      const groupDoc = await getDoc(groupDocRef);
+      if (groupDoc.exists() && !groupDoc.data().bannedMembers?.includes(user.uid)) {
+        await updateDoc(groupDocRef, {
+          [`userPoints.${user.uid}`]: newPoints,
+          updatedAt: serverTimestamp()
         });
-      }, 1000);
-    }
-    return () => clearInterval(interval);
-  }, [isRunning, activeEffects]);
-
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        fetchGroupData();
       }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, []);
-
-  useEffect(() => {
-    const savedMode = JSON.parse(localStorage.getItem('darkMode'));
-    if (savedMode !== null) {
-      setDarkMode(savedMode);
-      document.documentElement.setAttribute('data-theme', savedMode ? 'dark' : 'light');
+    } catch (error) {
+      console.error("Error updating points:", error);
     }
+  };
 
-    const savedLang = localStorage.getItem('language') || 'ar';
-    setLanguage(savedLang);
-  }, []);
-
-  // حفظ الوقت النهائي عند إيقاف المؤقت
-  useEffect(() => {
-    if (!isRunning && time > 0) {
-      timeService.updateUserTimeInGroup(groupId, user.uid, time);
+  // تشغيل المؤقت (نحفظ lastStartAt = serverTimestamp، isRunning = true)
+  const startTimer = async () => {
+    try {
+      const snap = await getDoc(timerRef);
+      if (!snap.exists()) {
+        await setDoc(timerRef, {
+          totalSeconds: 0,
+          isRunning: true,
+          lastStartAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+      } else {
+        await updateDoc(timerRef, {
+          isRunning: true,
+          lastStartAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+      }
+      setIsRunning(true);
+      showNotification('▶ بدأ المؤقت');
+    } catch (error) {
+      console.error("Error starting timer:", error);
+      showNotification('حدث خطأ أثناء تشغيل المؤقت');
     }
-  }, [isRunning, time, groupId, user.uid]);
+  };
 
+  // إيقاف المؤقت: نحسب الفرق ونحدث totalSeconds، isRunning = false، lastStartAt = null
+  const stopTimer = async () => {
+    try {
+      await runTransaction(db, async (transaction) => {
+        const snap = await transaction.get(timerRef);
+        if (!snap.exists()) {
+          transaction.set(timerRef, {
+            totalSeconds: 0,
+            isRunning: false,
+            lastStartAt: null,
+            updatedAt: serverTimestamp()
+          });
+          return;
+        }
+
+        const data = snap.data();
+        let total = data.totalSeconds || 0;
+
+        if (data.isRunning && data.lastStartAt) {
+          const last = data.lastStartAt;
+          const lastMs = last.toDate ? last.toDate().getTime() : new Date(last).getTime();
+          const diffSeconds = Math.floor((Date.now() - lastMs) / 1000);
+          total += diffSeconds;
+        }
+
+        transaction.update(timerRef, {
+          totalSeconds: total,
+          isRunning: false,
+          lastStartAt: null,
+          updatedAt: serverTimestamp()
+        });
+
+        // optional: تحديث نقاط في مجموعة (مثال: كل 30 ثانية نقطة)
+        // لكن هنا سنترك منطق النقاط للمستمع المحلي/خادم كما تريد
+      });
+
+      setIsRunning(false);
+      showNotification('⏸ تم إيقاف المؤقت');
+    } catch (error) {
+      console.error("Error stopping timer:", error);
+      showNotification('حدث خطأ أثناء إيقاف المؤقت');
+    }
+  };
+
+  const resetTimer = async () => {
+    try {
+      await updateDoc(timerRef, {
+        totalSeconds: 0,
+        isRunning: false,
+        lastStartAt: null,
+        updatedAt: serverTimestamp()
+      });
+      setTime(0);
+      setIsRunning(false);
+      showNotification('🔁 تم إعادة ضبط المؤقت');
+    } catch (error) {
+      console.error("Error resetting timer:", error);
+      showNotification('حدث خطأ أثناء إعادة الضبط');
+    }
+  };
+
+  // شراء عنصر من المتجر (يقوم بتخفيض نقاط المستخدم في مستند الجروب، وإضافة العنصر للمستخدم في users/{uid})
+  const purchaseItem = async (item) => {
+    try {
+      await runTransaction(db, async (transaction) => {
+        const groupSnap = await transaction.get(groupDocRef);
+        if (!groupSnap.exists()) throw new Error("المجموعة غير موجودة");
+
+        const groupData = groupSnap.data();
+        const userPoints = groupData.userPoints?.[user.uid] || 0;
+
+        if (userPoints < item.price) {
+          throw new Error("نقاط غير كافية");
+        }
+
+        // تحديث نقاط المستخدم في مستند المجموعة
+        transaction.update(groupDocRef, {
+          [`userPoints.${user.uid}`]: userPoints - item.price,
+          updatedAt: serverTimestamp()
+        });
+
+        // تحديث مستند المستخدم - إضافة للمخزون وتفعيل التأثير
+        const userSnap = await transaction.get(userDocRef);
+        const userData = userSnap.exists() ? userSnap.data() : {};
+
+        const newInventory = Array.isArray(userData.inventory) ? [...userData.inventory] : [];
+        if (!newInventory.includes(item.id)) newInventory.push(item.id);
+
+        const newEffects = Array.isArray(userData.activeEffects) ? [...userData.activeEffects] : [];
+
+        // إضافة تأثير جديد مع تاريخ انتهاء
+        if (effectDurations[item.effect]) {
+          const expiresAt = Timestamp.fromDate(new Date(Date.now() + effectDurations[item.effect]));
+          newEffects.push({
+            type: item.effect,
+            itemId: item.id,
+            expiresAt
+          });
+        }
+
+        transaction.set(userDocRef, {
+          ...userData,
+          inventory: newInventory,
+          activeEffects: newEffects
+        }, { merge: true });
+      });
+
+      // تحديث محلي سريع
+      setPoints(prev => prev - item.price);
+      setInventory(prev => prev.includes(item.id) ? prev : [...prev, item.id]);
+      if (effectDurations[item.effect]) {
+        setActiveEffects(prev => [
+          ...prev,
+          {
+            type: item.effect,
+            itemId: item.id,
+            expiresAt: new Date(Date.now() + effectDurations[item.effect])
+          }
+        ]);
+      }
+
+      showNotification(`🎉 تم شراء ${item.name}`);
+    } catch (error) {
+      if (error.message === "نقاط غير كافية") {
+        showNotification('❌ نقاطك غير كافية!');
+      } else {
+        console.error("Error purchasing item:", error);
+        showNotification('⚠️ حدث خطأ أثناء الشراء');
+      }
+    }
+  };
+
+  const toggleMembersSidebar = () => {
+    setShowMembers(prev => !prev);
+  };
+
+  // مؤقت نقاط تلقائي (مثال: كل 30 ثانية تضيف نقطة) — هذا يعمل محليًا ويحدث Firestore عندما يصل الوقت إلى نقطة تحديث
+  useEffect(() => {
+    // عندما يتغير الوقت ونكون في وقت قابل للتحديث (كل 30 ثانية) نقوم بتحديث النقاط في Firestore
+    if (!isRunning) return;
+    if (time > 0 && time % 30 === 0 && time !== lastUpdateTime) {
+      // حساب نقاط مكتسبة (يمكن تطبيق التأثيرات)
+      const double = activeEffects.some(e => e.type === 'double_points' && (e.expiresAt ? (e.expiresAt.toDate ? e.expiresAt.toDate().getTime() : new Date(e.expiresAt).getTime()) > Date.now() : true));
+      const pointsEarned = double ? 2 : 1;
+      const newPoints = (points || 0) + pointsEarned;
+      setPoints(newPoints);
+      setLastUpdateTime(time);
+      updatePoints(newPoints);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [time, isRunning, activeEffects, lastUpdateTime]);
+
+  // محاكاة للحالة المتصلة للأعضاء
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const randomOnline = members
+        .filter(() => Math.random() > 0.7)
+        .map(member => member.uid);
+      setOnlineUsers(randomOnline);
+    }, 10000);
+
+    return () => clearInterval(interval);
+  }, [members]);
+
+  // وظائف إدارية لأعضاء (إزالة/حظر)
   const removeMember = async (memberId) => {
     if (window.confirm(`هل أنت متأكد من حذف هذا العضو من المجموعة؟`)) {
       try {
         await runTransaction(db, async (transaction) => {
-          const groupDoc = await transaction.get(doc(db, "studyGroups", groupId));
+          const groupDoc = await transaction.get(groupDocRef);
           if (!groupDoc.exists()) throw new Error("المجموعة غير موجودة");
           
           const groupData = groupDoc.data();
-          const updatedMembers = groupData.members.filter(m => m !== memberId);
-          const updatedUserPoints = {...groupData.userPoints};
-          const updatedUserTimes = {...groupData.userTimes};
-          
+          const updatedMembers = (groupData.members || []).filter(m => m !== memberId);
+          const updatedUserPoints = {...(groupData.userPoints || {})};
           delete updatedUserPoints[memberId];
-          delete updatedUserTimes[memberId];
           
-          transaction.update(doc(db, "studyGroups", groupId), {
+          transaction.update(groupDocRef, {
             members: updatedMembers,
             userPoints: updatedUserPoints,
-            userTimes: updatedUserTimes
+            updatedAt: serverTimestamp()
           });
         });
         showNotification("✅ تم حذف العضو بنجاح");
@@ -872,7 +839,7 @@ function Timer({ user, onBack, groupId }) {
     if (window.confirm(`هل أنت متأكد من ${bannedMembers.includes(memberId) ? 'إلغاء حظر' : 'حظر'} هذا العضو؟`)) {
       try {
         await runTransaction(db, async (transaction) => {
-          const groupDoc = await transaction.get(doc(db, "studyGroups", groupId));
+          const groupDoc = await transaction.get(groupDocRef);
           if (!groupDoc.exists()) throw new Error("المجموعة غير موجودة");
           
           const groupData = groupDoc.data();
@@ -895,10 +862,9 @@ function Timer({ user, onBack, groupId }) {
           
           if (!isBanned) {
             updates[`userPoints.${memberId}`] = 0;
-            updates[`userTimes.${memberId}`] = 0;
           }
           
-          transaction.update(doc(db, "studyGroups", groupId), updates);
+          transaction.update(groupDocRef, updates);
         });
         
         showNotification(`✅ تم ${bannedMembers.includes(memberId) ? 'إلغاء حظر' : 'حظر'} العضو بنجاح`);
@@ -909,106 +875,93 @@ function Timer({ user, onBack, groupId }) {
     }
   };
 
-  const resetTimer = () => {
-    if (window.confirm("هل أنت متأكد من إعادة ضبط المؤقت؟ هذا سيحذف الوقت الحالي لهذه الجلسة فقط.")) {
-      setIsRunning(false);
-      setTime(totalStudyTime); // العودة للوقت المحفوظ
-      showNotification("⏱ تم إعادة ضبط المؤقت للجلسة الحالية");
+  // حساب المستوى والشارات (كما في كودك الأصلي)
+  const calculateLevel = (pts) => {
+    const basePoints = 100;
+    const growthFactor = 1.2;
+    
+    if (pts < basePoints) {
+      return {
+        currentLevel: 1,
+        nextLevelPoints: basePoints,
+        progress: (pts / basePoints) * 100,
+        pointsToNextLevel: basePoints - pts
+      };
     }
-  };
 
-  const toggleMembersSidebar = () => {
-    setShowMembers(prev => !prev);
-  };
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const randomOnline = members
-        .filter(() => Math.random() > 0.7)
-        .map(member => member.uid);
-      setOnlineUsers(randomOnline);
-    }, 10000);
-
-    return () => clearInterval(interval);
-  }, [members]);
-
-  const handleActivateExam = async (exam) => {
-    setExamLoading(true);
-    try {
-      await examService.activateExam(exam.id);
-      showNotification('تم تفعيل الامتحان بنجاح');
-    } catch (error) {
-      console.error('Error activating exam:', error);
-      showNotification(`حدث خطأ أثناء تفعيل الامتحان: ${error.message}`);
-    } finally {
-      setExamLoading(false);
+    let level = 2;
+    let requiredPoints = Math.floor(basePoints * growthFactor);
+    let totalPointsNeeded = basePoints + requiredPoints;
+    
+    while (pts >= totalPointsNeeded) {
+      level++;
+      requiredPoints = Math.floor(requiredPoints * growthFactor);
+      totalPointsNeeded += requiredPoints;
     }
+    
+    const pointsForCurrentLevel = pts - (totalPointsNeeded - requiredPoints);
+    
+    return {
+      currentLevel: level,
+      nextLevelPoints: requiredPoints,
+      progress: (pointsForCurrentLevel / requiredPoints) * 100,
+      pointsToNextLevel: requiredPoints - pointsForCurrentLevel
+    };
   };
 
-  const handleDeactivateExam = async (exam) => {
-    setExamLoading(true);
-    try {
-      await examService.deactivateExam(exam.id);
-      showNotification('تم إيقاف الامتحان بنجاح');
-    } catch (error) {
-      console.error('Error deactivating exam:', error);
-      showNotification(`حدث خطأ أثناء إيقاف الامتحان: ${error.message}`);
-    } finally {
-      setExamLoading(false);
-    }
+  const getBadge = (level) => {
+    const badges = {
+      1: { name: "المبتدئ", icon: "🌱", color: "#10B981", bgColor: "rgba(16, 185, 129, 0.1)" },
+      5: { name: "المتعلم", icon: "📚", color: "#3B82F6", bgColor: "rgba(59, 130, 246, 0.1)" },
+      10: { name: "المجتهد", icon: "🎓", color: "#F59E0B", bgColor: "rgba(245, 158, 11, 0.1)" },
+      15: { name: "الخبير", icon: "🔍", color: "#8B5CF6", bgColor: "rgba(139, 92, 246, 0.1)" },
+      20: { name: "المحترف", icon: "🏅", color: "#EC4899", bgColor: "rgba(236, 72, 153, 0.1)" },
+      25: { name: "الأسطورة", icon: "🏆", color: "#F97316", bgColor: "rgba(249, 115, 22, 0.1)" },
+      30: { name: "رائد المعرفة", icon: "🚀", color: "#06B6D4", bgColor: "rgba(6, 182, 212, 0.1)" }
+    };
+    
+    const eligibleLevels = Object.keys(badges)
+      .map(Number)
+      .filter(lvl => level >= lvl)
+      .sort((a, b) => b - a);
+    
+    return badges[eligibleLevels[0]] || badges[1];
   };
 
-  const handleDeleteExam = async (examId) => {
-    if (window.confirm('هل أنت متأكد من حذف هذا الامتحان؟ سيتم حذف جميع النتائج المرتبطة به.')) {
-      setExamLoading(true);
-      try {
-        await examService.deleteExam(examId);
-        showNotification('تم حذف الامتحان بنجاح');
-      } catch (error) {
-        console.error('Error deleting exam:', error);
-        showNotification(`حدث خطأ أثناء حذف الامتحان: ${error.message}`);
-      } finally {
-        setExamLoading(false);
-      }
-    }
+  const { currentLevel, progress, pointsToNextLevel } = calculateLevel(points);
+  const currentBadge = getBadge(currentLevel);
+
+  const formatTime = (seconds) => {
+    const hrs = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+    
+    return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const handleExamSubmitted = async (examId, answers) => {
-    setExamLoading(true);
-    try {
-      const examDoc = await getDoc(doc(db, "exams", examId));
-      if (!examDoc.exists() || examDoc.data().status !== 'active') {
-        throw new Error("الامتحان غير متاح حالياً");
-      }
-
-      const score = calculateScore(answers);
-      await examService.submitExamResults({
-        examId,
-        questions: selectedExam.questions,
-        answers,
-        score,
-        totalQuestions: selectedExam.questions.length,
-        correctAnswers: selectedExam.questions.filter((q, i) => q.correctAnswer === answers[i]).length
-      });
-      showNotification(`تم تسليم الامتحان بنجاح! نتيجتك: ${score} نقطة`);
-      setActiveExamTab('list');
-    } catch (error) {
-      console.error('Error submitting exam:', error);
-      showNotification(`حدث خطأ أثناء تسليم الامتحان: ${error.message}`);
-    } finally {
-      setExamLoading(false);
-    }
+  const addStudySession = (duration, pointsEarned) => {
+    const newSession = {
+      date: new Date(),
+      duration,
+      pointsEarned
+    };
+    setStudySessions(prev => [newSession, ...prev].slice(0, 10));
   };
 
-  const calculateScore = (answers) => {
-    if (!selectedExam) return 0;
-    let score = 0;
-    selectedExam.questions.forEach((q, index) => {
-      if (answers[index] === q.correctAnswer) {
-        score += q.points || 1;
-      }
-    });
-    return score;
+  // تفعيل/إلغاء الوضع المظلم محلياً (كما في الإصدار الأصلي)
+  const toggleDarkMode = () => {
+    const newMode = !darkMode;
+    setDarkMode(newMode);
+    document.documentElement.setAttribute('data-theme', newMode ? 'dark' : 'light');
+    try { localStorage.setItem('darkMode', JSON.stringify(newMode)); } catch(e){}
+    showNotification(newMode ? '🌙 تم تفعيل الوضع المظلم' : '☀️ تم تفعيل الوضع الفاتح');
+  };
+
+  // تغيير اللغة (محلياً)
+  const changeLanguage = (lang) => {
+    setLanguage(lang);
+    try { localStorage.setItem('language', lang); } catch(e){}
+    showNotification(lang === 'ar' ? '🇸🇦 تم تغيير اللغة إلى العربية' : '🇬🇧 Language changed to English');
   };
 
   return (
@@ -1163,7 +1116,6 @@ function Timer({ user, onBack, groupId }) {
             <div className="time-display">
               <h2>وقت المذاكرة</h2>
               <div className="time">{formatTime(time)}</div>
-              <p className="time-info">الوقت محفوظ في المجموعة حتى لو أعدت تحميل الصفحة</p>
             </div>
             
             <div className="stats-display">
@@ -1175,11 +1127,6 @@ function Timer({ user, onBack, groupId }) {
               <div className="stat-box">
                 <span className="stat-label">المستوى</span>
                 <span className="stat-value">{currentLevel}</span>
-              </div>
-              
-              <div className="stat-box">
-                <span className="stat-label">إجمالي الوقت</span>
-                <span className="stat-value">{formatTime(totalStudyTime)}</span>
               </div>
             </div>
             
@@ -1201,25 +1148,25 @@ function Timer({ user, onBack, groupId }) {
             
             <div className="timer-controls">
               <button 
-                onClick={() => setIsRunning(!isRunning)}
+                onClick={() => isRunning ? stopTimer() : startTimer()}
                 className={`control-button ${isRunning ? 'pause-button' : 'start-button'}`}
                 disabled={bannedMembers.includes(user.uid)}
               >
-                {isRunning ? '⏸️ إيقاف' : '▶️ بدء'}
+                {isRunning ? ' إيقاف' : ' بدء'}
               </button>
               
               <button 
                 onClick={resetTimer}
                 className="control-button reset-button"
               >
-                🔄 إعادة تعيين
+                 إعادة تعيين
               </button>
               
               <button
                 onClick={toggleMembersSidebar}
                 className="control-button members-button"
               >
-                {showMembers ? '👥 إخفاء الأعضاء' : '👥 عرض الأعضاء'}
+                {showMembers ? ' إخفاء الأعضاء' : ' عرض الأعضاء'}
               </button>
             </div>
 
@@ -1231,16 +1178,17 @@ function Timer({ user, onBack, groupId }) {
                     const item = shopItems.find(i => i.id === effect.itemId);
                     if (!item) return null;
                     
-                    const minutesLeft = Math.ceil((effect.expires - Date.now()) / (60 * 1000));
+                    const expires = effect.expiresAt ? (effect.expiresAt.toDate ? effect.expiresAt.toDate() : new Date(effect.expiresAt)) : null;
+                    const minsLeft = expires ? Math.ceil((expires.getTime() - Date.now()) / (60 * 1000)) : '-';
                     
                     return (
                       <div key={index} className="active-effect">
                         <span className="effect-icon" style={{ color: item.color }}>
                           {item.icon}
                         </span>
-                        <span className="effect-name">{effect.name}</span>
+                        <span className="effect-name">{item.name}</span>
                         <span className="effect-time">
-                          {minutesLeft} دقيقة متبقية
+                          {minsLeft === '-' ? '—' : `${minsLeft} دقائق متبقية`}
                         </span>
                       </div>
                     );
@@ -1261,10 +1209,6 @@ function Timer({ user, onBack, groupId }) {
               />
               <h2>{user.displayName}</h2>
               <p className="user-level">المستوى {currentLevel}</p>
-              <div className="current-badge" style={{ backgroundColor: currentBadge.bgColor, color: currentBadge.color }}>
-                <span>{currentBadge.icon}</span>
-                <span>{currentBadge.name}</span>
-              </div>
             </div>
             
             <div className="profile-stats">
@@ -1274,13 +1218,8 @@ function Timer({ user, onBack, groupId }) {
               </div>
               
               <div className="stat-row">
-                <span className="stat-label">إجمالي وقت الدراسة في هذه المجموعة:</span>
-                <span className="stat-value">{formatTimeReadable(totalStudyTime)}</span>
-              </div>
-              
-              <div className="stat-row">
-                <span className="stat-label">الوقت في الجلسة الحالية:</span>
-                <span className="stat-value">{formatTimeReadable(time)}</span>
+                <span className="stat-label">إجمالي وقت الدراسة (في هذه المجموعة):</span>
+                <span className="stat-value">{formatTime(time)}</span>
               </div>
               
               <div className="stat-row">
@@ -1296,10 +1235,10 @@ function Timer({ user, onBack, groupId }) {
                   {studySessions.map((session, index) => (
                     <div key={index} className="session-item">
                       <span className="session-date">
-                        {new Date(session.date).toLocaleDateString('ar-EG')}
+                        {new Date(session.date).toLocaleDateString()}
                       </span>
                       <span className="session-duration">
-                        {formatTimeReadable(session.duration)}
+                        {formatTime(session.duration)}
                       </span>
                       <span className="session-points">
                         +{session.pointsEarned} نقطة
@@ -1320,45 +1259,38 @@ function Timer({ user, onBack, groupId }) {
               <span className="points-balance">{points} نقطة</span>
             </div>
             <div className="shop-items">
-              {shopItems.map(item => {
-                const hasEffect = activeEffects.some(e => e.itemId === item.id);
-                
-                return (
+              {shopItems.map(item => (
+                <div 
+                  key={item.id} 
+                  className={`shop-item ${hoveredItem === item.id ? 'hovered' : ''} ${hoveredItem === item.id ? item.hoverEffect : ''}`}
+                  style={{ 
+                    borderColor: item.color,
+                    backgroundColor: item.bgColor,
+                  }}
+                  onMouseEnter={() => setHoveredItem(item.id)}
+                  onMouseLeave={() => setHoveredItem(null)}
+                >
                   <div 
-                    key={item.id} 
-                    className={`shop-item ${hoveredItem === item.id ? 'hovered' : ''} ${hasEffect ? 'active-effect' : ''}`}
-                    style={{ 
-                      borderColor: item.color,
-                      backgroundColor: hasEffect ? item.color + '20' : item.bgColor,
-                    }}
-                    onMouseEnter={() => setHoveredItem(item.id)}
-                    onMouseLeave={() => setHoveredItem(null)}
+                    className="item-icon" 
+                    style={{ color: item.color }}
                   >
-                    <div 
-                      className="item-icon" 
-                      style={{ color: item.color }}
-                    >
-                      {item.icon}
-                    </div>
-                    <h3>{item.name}</h3>
-                    <p className="item-description">{item.description}</p>
-                    <p className="item-price" style={{ color: item.color }}>
-                      {item.price} نقطة
-                    </p>
-                    <button 
-                      onClick={() => purchaseItem(item)}
-                      disabled={points < item.price || hasEffect}
-                      className={points < item.price || hasEffect ? 'disabled' : ''}
-                      style={{ 
-                        backgroundColor: points < item.price ? '#ccc' : item.color,
-                        cursor: points < item.price || hasEffect ? 'not-allowed' : 'pointer'
-                      }}
-                    >
-                      {hasEffect ? 'مفعّل' : (points < item.price ? 'نقاط غير كافية' : 'شراء')}
-                    </button>
+                    {item.icon}
                   </div>
-                );
-              })}
+                  <h3>{item.name}</h3>
+                  <p className="item-description">{item.description}</p>
+                  <p className="item-price" style={{ color: item.color }}>
+                    {item.price} نقطة
+                  </p>
+                  <button 
+                    onClick={() => purchaseItem(item)}
+                    disabled={points < item.price}
+                    className={points < item.price ? 'disabled' : ''}
+                    style={{ backgroundColor: item.color }}
+                  >
+                    {points < item.price ? 'نقاط غير كافية' : 'شراء'}
+                  </button>
+                </div>
+              ))}
             </div>
           </div>
         )}
@@ -1385,9 +1317,44 @@ function Timer({ user, onBack, groupId }) {
                 exams={exams} 
                 isCreator={isCreator}
                 currentUserId={user?.uid}
-                onActivateExam={handleActivateExam}
-                onDeactivateExam={handleDeactivateExam}
-                onDeleteExam={handleDeleteExam}
+                onActivateExam={async (exam) => {
+                  setExamLoading(true);
+                  try {
+                    await examService.activateExam(exam.id);
+                    showNotification('تم تفعيل الامتحان بنجاح');
+                  } catch (error) {
+                    console.error('Error activating exam:', error);
+                    showNotification(`حدث خطأ أثناء تفعيل الامتحان: ${error.message}`);
+                  } finally {
+                    setExamLoading(false);
+                  }
+                }}
+                onDeactivateExam={async (exam) => {
+                  setExamLoading(true);
+                  try {
+                    await examService.deactivateExam(exam.id);
+                    showNotification('تم إيقاف الامتحان بنجاح');
+                  } catch (error) {
+                    console.error('Error deactivating exam:', error);
+                    showNotification(`حدث خطأ أثناء إيقاف الامتحان: ${error.message}`);
+                  } finally {
+                    setExamLoading(false);
+                  }
+                }}
+                onDeleteExam={async (examId) => {
+                  if (window.confirm('هل أنت متأكد من حذف هذا الامتحان؟ سيتم حذف جميع النتائج المرتبطة به.')) {
+                    setExamLoading(true);
+                    try {
+                      await examService.deleteExam(examId);
+                      showNotification('تم حذف الامتحان بنجاح');
+                    } catch (error) {
+                      console.error('Error deleting exam:', error);
+                      showNotification(`حدث خطأ أثناء حذف الامتحان: ${error.message}`);
+                    } finally {
+                      setExamLoading(false);
+                    }
+                  }
+                }}
                 onStartCreate={() => setActiveExamTab('create')}
                 onViewResults={(exam) => {
                   setSelectedExam(exam);
@@ -1423,7 +1390,32 @@ function Timer({ user, onBack, groupId }) {
               <TakeExam 
                 exam={selectedExam} 
                 userId={user.uid} 
-                onComplete={handleExamSubmitted}
+                onComplete={async (examId, answers) => {
+                  setExamLoading(true);
+                  try {
+                    const examDoc = await getDoc(doc(db, "exams", examId));
+                    if (!examDoc.exists() || examDoc.data().status !== 'active') {
+                      throw new Error("الامتحان غير متاح حالياً");
+                    }
+
+                    const score = calculateScore(answers);
+                    await examService.submitExamResults({
+                      examId,
+                      questions: selectedExam.questions,
+                      answers,
+                      score,
+                      totalQuestions: selectedExam.questions.length,
+                      correctAnswers: selectedExam.questions.filter((q, i) => q.correctAnswer === answers[i]).length
+                    });
+                    showNotification(`تم تسليم الامتحان بنجاح! نتيجتك: ${score} نقطة`);
+                    setActiveExamTab('list');
+                  } catch (error) {
+                    console.error('Error submitting exam:', error);
+                    showNotification(`حدث خطأ أثناء تسليم الامتحان: ${error.message}`);
+                  } finally {
+                    setExamLoading(false);
+                  }
+                }}
                 onBack={() => setActiveExamTab('list')}
               />
             )}
@@ -1473,17 +1465,11 @@ function Timer({ user, onBack, groupId }) {
                       />
                       {onlineUsers.includes(member.uid) && <div className="online-status"></div>}
                       {hoveredAvatar === member.uid && <div className="avatar-tooltip">{member.name}</div>}
-                      
-                      {/* إظهار التاج الذهبي إذا كان لدى المستخدم هذا التأثير */}
-                      {activeEffects.some(e => e.type === 'golden_crown' && member.uid === user.uid) && (
-                        <div className="golden-crown">👑</div>
-                      )}
                     </div>
                     
                     <div className="member-info">
                       <span className="member-name">{member.name}</span>
                       <span className="member-points">{member.points} نقطة</span>
-                      <span className="member-time">{formatTime(member.studyTime || 0)}</span>
                     </div>
                     
                     {isCreator && member.uid !== user.uid && (
@@ -1627,6 +1613,7 @@ function App() {
     });
     
     return () => unsubscribe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const fetchUserGroups = async (userId) => {
@@ -1655,9 +1642,7 @@ function App() {
           ...groupData,
           creatorName,
           code: docSnap.id.slice(0, 6).toUpperCase(),
-          isCreator: groupData.creator === userId,
-          userPoints: groupData.userPoints?.[userId] || 0,
-          userTime: groupData.userTimes?.[userId] || 0
+          isCreator: groupData.creator === userId
         };
       });
       
@@ -1728,7 +1713,6 @@ function App() {
         creator: user.uid,
         members: [user.uid],
         userPoints: { [user.uid]: 0 },
-        userTimes: { [user.uid]: 0 }, // إضافة حقل لتخزين الوقت
         bannedMembers: []
       };
       
@@ -1802,8 +1786,8 @@ function App() {
         
         await updateDoc(doc(db, "studyGroups", groupToJoin.id), {
           [`userPoints.${user.uid}`]: 0,
-          [`userTimes.${user.uid}`]: 0, // إضافة وقت بداية للمستخدم الجديد
-          members: [...(groupToJoin.members || []), user.uid]
+          members: [...(groupToJoin.members || []), user.uid],
+          updatedAt: serverTimestamp()
         });
         
         setSelectedGroup(groupToJoin.id);
@@ -1832,7 +1816,7 @@ function App() {
     if (!codeVerified) {
       setShowCodeModal(true);
     } else {
-      document.querySelector('.group-creation input').focus();
+      document.querySelector('.group-creation input')?.focus();
     }
   };
 
@@ -2006,12 +1990,6 @@ function App() {
                                 <span className="group-creator">المنشئ: {group.creatorName}</span>
                                 <span className="group-code">كود: {group.code}</span>
                               </p>
-                              <div className="group-stats">
-                                <span className="group-points">نقاطك: {group.userPoints || 0}</span>
-                                <span className="group-time">وقتك: {group.userTime ? 
-                                  `${Math.floor(group.userTime / 3600)}س ${Math.floor((group.userTime % 3600) / 60)}د` 
-                                  : '0س 0د'}</span>
-                              </div>
                               {group.isCreator && <span className="creator-badge">أنت المنشئ</span>}
                             </div>
                             
