@@ -16,8 +16,7 @@ import {
   onSnapshot, 
   runTransaction, 
   arrayUnion,
-  writeBatch,
-  increment
+  writeBatch
 } from 'firebase/firestore';
 import './App.css';
 import AttendanceCalendar from './components/AttendanceCalendar';
@@ -53,225 +52,6 @@ const generateUniqueCode = () => {
   return code;
 };
 
-// خدمة إدارة وقت الدراسة الدائم - تم إصلاحها
-const studyTimeService = {
-  startStudySession: async (userId, groupId) => {
-    try {
-      const sessionId = `${userId}_${groupId}_${Date.now()}`;
-      const sessionRef = doc(db, "studySessions", sessionId);
-      await setDoc(sessionRef, {
-        userId,
-        groupId,
-        startTime: new Date(),
-        endTime: null,
-        duration: 0,
-        pointsEarned: 0,
-        status: 'active',
-        createdAt: new Date()
-      });
-      return sessionId;
-    } catch (error) {
-      console.error("Error starting study session:", error);
-      throw error;
-    }
-  },
-
-  // تم إصلاح هذه الدالة لمنع مضاعفة النقاط
-  endStudySession: async (sessionId, durationSeconds) => {
-    try {
-      const sessionRef = doc(db, "studySessions", sessionId);
-      const sessionDoc = await getDoc(sessionRef);
-      
-      if (!sessionDoc.exists()) {
-        throw new Error("الجلسة غير موجودة");
-      }
-      
-      const sessionData = sessionDoc.data();
-      
-      // حساب النقاط بشكل صحيح
-      const pointsEarned = Math.floor(durationSeconds / 30);
-      
-      await updateDoc(sessionRef, {
-        endTime: new Date(),
-        duration: durationSeconds,
-        pointsEarned,
-        status: 'completed',
-        updatedAt: new Date()
-      });
-
-      const userRef = doc(db, "users", sessionData.userId);
-      
-      await runTransaction(db, async (transaction) => {
-        const userDoc = await transaction.get(userRef);
-        
-        if (!userDoc.exists()) {
-          throw new Error("المستخدم غير موجود");
-        }
-        
-        const currentTotal = userDoc.data().totalStudyTime || 0;
-        const newTotal = currentTotal + durationSeconds;
-        
-        const currentPoints = userDoc.data().points || 0;
-        const newPoints = currentPoints + pointsEarned;
-        
-        transaction.update(userRef, {
-          totalStudyTime: newTotal,
-          points: newPoints,
-          lastStudySession: new Date()
-        });
-        
-        const groupRef = doc(db, "studyGroups", sessionData.groupId);
-        const groupDoc = await transaction.get(groupRef);
-        
-        if (groupDoc.exists()) {
-          const currentGroupPoints = groupDoc.data().userPoints?.[sessionData.userId] || 0;
-          transaction.update(groupRef, {
-            [`userPoints.${sessionData.userId}`]: currentGroupPoints + pointsEarned
-          });
-        }
-      });
-      
-      return { success: true, pointsEarned };
-    } catch (error) {
-      console.error("Error ending study session:", error);
-      throw error;
-    }
-  },
-
-  getUserTotalStudyTime: async (userId) => {
-    try {
-      const userRef = doc(db, "users", userId);
-      const userDoc = await getDoc(userRef);
-      
-      if (userDoc.exists()) {
-        const userData = userDoc.data();
-        return userData.totalStudyTime || 0;
-      }
-      return 0;
-    } catch (error) {
-      console.error("Error getting total study time:", error);
-      return 0;
-    }
-  },
-
-  getUserRecentSessions: async (userId, limit = 10) => {
-    try {
-      const q = query(
-        collection(db, "studySessions"),
-        where("userId", "==", userId),
-        where("status", "==", "completed")
-      );
-      
-      const querySnapshot = await getDocs(q);
-      const sessions = querySnapshot.docs
-        .map(doc => ({ 
-          id: doc.id, 
-          ...doc.data(),
-          endTime: doc.data().endTime?.toDate ? doc.data().endTime.toDate() : null
-        }))
-        .sort((a, b) => {
-          const timeA = a.endTime || new Date(0);
-          const timeB = b.endTime || new Date(0);
-          return timeB - timeA;
-        })
-        .slice(0, limit);
-      
-      return sessions;
-    } catch (error) {
-      console.error("Error getting recent sessions:", error);
-      return [];
-    }
-  },
-
-  getActiveSession: async (userId, groupId) => {
-    try {
-      const q = query(
-        collection(db, "studySessions"),
-        where("userId", "==", userId),
-        where("groupId", "==", groupId),
-        where("status", "==", "active")
-      );
-      
-      const querySnapshot = await getDocs(q);
-      if (querySnapshot.empty) {
-        return null;
-      }
-      
-      const sessionDoc = querySnapshot.docs[0];
-      return {
-        id: sessionDoc.id,
-        ...sessionDoc.data(),
-        startTime: sessionDoc.data().startTime?.toDate ? sessionDoc.data().startTime.toDate() : null
-      };
-    } catch (error) {
-      console.error("Error getting active session:", error);
-      return null;
-    }
-  },
-
-  updateActiveSession: async (sessionId, currentDuration) => {
-    try {
-      const sessionRef = doc(db, "studySessions", sessionId);
-      await updateDoc(sessionRef, {
-        duration: currentDuration,
-        lastUpdated: new Date()
-      });
-    } catch (error) {
-      console.error("Error updating active session:", error);
-    }
-  },
-
-  getUserStudyStats: async (userId) => {
-    try {
-      const q = query(
-        collection(db, "studySessions"),
-        where("userId", "==", userId),
-        where("status", "==", "completed")
-      );
-      
-      const querySnapshot = await getDocs(q);
-      let totalDuration = 0;
-      let totalPoints = 0;
-      let sessionCount = 0;
-      let todayDuration = 0;
-      
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      
-      querySnapshot.docs.forEach(doc => {
-        const session = doc.data();
-        totalDuration += session.duration || 0;
-        totalPoints += session.pointsEarned || 0;
-        sessionCount++;
-        
-        if (session.endTime) {
-          const endTime = session.endTime.toDate ? session.endTime.toDate() : new Date(session.endTime);
-          if (endTime >= today) {
-            todayDuration += session.duration || 0;
-          }
-        }
-      });
-      
-      return {
-        totalDuration,
-        totalPoints,
-        sessionCount,
-        todayDuration,
-        averageDuration: sessionCount > 0 ? Math.round(totalDuration / sessionCount) : 0
-      };
-    } catch (error) {
-      console.error("Error getting study stats:", error);
-      return {
-        totalDuration: 0,
-        totalPoints: 0,
-        sessionCount: 0,
-        todayDuration: 0,
-        averageDuration: 0
-      };
-    }
-  }
-};
-
 // خدمة إدارة المستخدمين
 const userService = {
   createOrUpdateUser: async (user) => {
@@ -280,6 +60,7 @@ const userService = {
       const userSnap = await getDoc(userRef);
       
       if (!userSnap.exists()) {
+        // إنشاء مستخدم جديد مع كود مميز
         const uniqueCode = generateUniqueCode();
         await setDoc(userRef, {
           uid: user.uid,
@@ -290,30 +71,14 @@ const userService = {
           hasVerifiedCode: false,
           createdAt: new Date(),
           points: 0,
-          level: 1,
-          totalStudyTime: 0,
-          lastStudySession: null,
-          studySessionsCount: 0
+          level: 1
         });
         return { uniqueCode, hasVerifiedCode: false };
       } else {
-        const userData = userSnap.data();
-        
-        const updates = {};
-        if (userData.totalStudyTime === undefined) {
-          updates.totalStudyTime = userData.totalStudyTime || 0;
-        }
-        if (userData.studySessionsCount === undefined) {
-          updates.studySessionsCount = userData.studySessionsCount || 0;
-        }
-        
-        if (Object.keys(updates).length > 0) {
-          await updateDoc(userRef, updates);
-        }
-        
+        // المستخدم موجود بالفعل
         return {
-          uniqueCode: userData.uniqueCode,
-          hasVerifiedCode: userData.hasVerifiedCode || false
+          uniqueCode: userSnap.data().uniqueCode,
+          hasVerifiedCode: userSnap.data().hasVerifiedCode || false
         };
       }
     } catch (error) {
@@ -368,7 +133,7 @@ const userService = {
     }
   },
 
-  verifyCode: async (userId, code) => {
+  verifyUserCode: async (userId, code) => {
     try {
       const codeRef = doc(db, "userCodes", userId);
       const codeSnap = await getDoc(codeRef);
@@ -389,12 +154,14 @@ const userService = {
           verifiedAt: new Date()
         });
         
+        // تحديث حالة التحقق في مستند المستخدم
         await updateDoc(doc(db, "users", userId), {
           hasVerifiedCode: true
         });
         
         return { verified: true, message: "تم التحقق بنجاح" };
       } else {
+        // زيادة عدد المحاولات
         await updateDoc(codeRef, {
           attempts: codeData.attempts + 1
         });
@@ -436,32 +203,6 @@ const userService = {
     } catch (error) {
       console.error("Error checking code verification:", error);
       throw error;
-    }
-  },
-
-  loadUserStudyData: async (userId) => {
-    try {
-      const userRef = doc(db, "users", userId);
-      const userSnap = await getDoc(userRef);
-      
-      if (!userSnap.exists()) {
-        return null;
-      }
-      
-      const userData = userSnap.data();
-      
-      const sessions = await studyTimeService.getUserRecentSessions(userId, 10);
-      const stats = await studyTimeService.getUserStudyStats(userId);
-      
-      return {
-        ...userData,
-        recentSessions: sessions,
-        studyStats: stats,
-        totalStudyTime: userData.totalStudyTime || stats.totalDuration
-      };
-    } catch (error) {
-      console.error("Error loading user study data:", error);
-      return null;
     }
   }
 };
@@ -651,8 +392,7 @@ const examService = {
 
 function Timer({ user, onBack, groupId }) {
   const [isRunning, setIsRunning] = useState(false);
-  const [sessionTime, setSessionTime] = useState(0);
-  const [totalStudyTime, setTotalStudyTime] = useState(0);
+  const [time, setTime] = useState(0);
   const [points, setPoints] = useState(0);
   const [lastUpdateTime, setLastUpdateTime] = useState(0);
   const [members, setMembers] = useState([]);
@@ -675,18 +415,11 @@ function Timer({ user, onBack, groupId }) {
   const [selectedExam, setSelectedExam] = useState(null);
   const [activeExamTab, setActiveExamTab] = useState('list');
   const [examLoading, setExamLoading] = useState(false);
-  const [currentSessionId, setCurrentSessionId] = useState(null);
-  const [isLoadingTime, setIsLoadingTime] = useState(true);
-  const [studyStats, setStudyStats] = useState({
-    totalDuration: 0,
-    sessionCount: 0,
-    todayDuration: 0,
-    averageDuration: 0
-  });
 
+  // نظام المستويات المعدل
   const calculateLevel = (points) => {
-    const basePoints = 100;
-    const growthFactor = 1.2;
+    const basePoints = 100; // النقاط المطلوبة للوصول للمستوى 2
+    const growthFactor = 1.2; // عامل النمو بين المستويات
     
     if (points < basePoints) {
       return {
@@ -717,6 +450,7 @@ function Timer({ user, onBack, groupId }) {
     };
   };
 
+  // نظام الشارات المعدل
   const getBadge = (level) => {
     const badges = {
       1: { name: "المبتدئ", icon: "🌱", color: "#10B981", bgColor: "rgba(16, 185, 129, 0.1)" },
@@ -728,6 +462,7 @@ function Timer({ user, onBack, groupId }) {
       30: { name: "رائد المعرفة", icon: "🚀", color: "#06B6D4", bgColor: "rgba(6, 182, 212, 0.1)" }
     };
     
+    // إيجاد أعلى شارة مؤهلة
     const eligibleLevels = Object.keys(badges)
       .map(Number)
       .filter(lvl => level >= lvl)
@@ -829,31 +564,15 @@ function Timer({ user, onBack, groupId }) {
     }
   };
 
-  const formatTimeDetailed = (seconds) => {
-    const hrs = Math.floor(seconds / 3600);
-    const mins = Math.floor((seconds % 3600) / 60);
-    const secs = seconds % 60;
-    
-    let result = '';
-    if (hrs > 0) result += `${hrs} ساعة `;
-    if (mins > 0) result += `${mins} دقيقة `;
-    if (secs > 0 || result === '') result += `${secs} ثانية`;
-    
-    return result.trim();
-  };
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setActiveEffects(prev => 
+        prev.filter(effect => effect.expires > Date.now())
+      );
+    }, 60000);
 
-  const formatTime = (seconds) => {
-    const hrs = Math.floor(seconds / 3600);
-    const mins = Math.floor((seconds % 3600) / 60);
-    const secs = seconds % 60;
-    
-    return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  };
-
-  const showNotification = (message) => {
-    setNotification(message);
-    setTimeout(() => setNotification(null), 3000);
-  };
+    return () => clearInterval(interval);
+  }, []);
 
   const toggleDarkMode = () => {
     const newMode = !darkMode;
@@ -869,179 +588,38 @@ function Timer({ user, onBack, groupId }) {
     showNotification(lang === 'ar' ? '🇸🇦 تم تغيير اللغة إلى العربية' : '🇬🇧 Language changed to English');
   };
 
-  // دالة لتحميل النقاط من Firebase
-  const loadUserPoints = async () => {
-    try {
-      const userRef = doc(db, "users", user.uid);
-      const userDoc = await getDoc(userRef);
-      
-      if (userDoc.exists()) {
-        const userData = userDoc.data();
-        setPoints(userData.points || 0);
-      }
-    } catch (error) {
-      console.error("Error loading user points:", error);
-    }
+  const showNotification = (message) => {
+    setNotification(message);
+    setTimeout(() => setNotification(null), 3000);
   };
 
-  // تحميل البيانات الأولية
-  useEffect(() => {
-    const loadStudyData = async () => {
-      setIsLoadingTime(true);
-      try {
-        // تحميل إجمالي وقت الدراسة
-        const totalTime = await studyTimeService.getUserTotalStudyTime(user.uid);
-        setTotalStudyTime(totalTime);
-        
-        // تحميل النقاط
-        await loadUserPoints();
-        
-        // تحميل جلسات الدراسة الأخيرة
-        const recentSessions = await studyTimeService.getUserRecentSessions(user.uid, 10);
-        setStudySessions(recentSessions);
-        
-        // تحميل الإحصائيات
-        const stats = await studyTimeService.getUserStudyStats(user.uid);
-        setStudyStats(stats);
-        
-        // التحقق من وجود جلسة نشطة
-        const activeSession = await studyTimeService.getActiveSession(user.uid, groupId);
-        if (activeSession) {
-          setCurrentSessionId(activeSession.id);
-          setSessionTime(activeSession.duration || 0);
-          setIsRunning(true);
-        }
-      } catch (error) {
-        console.error("Error loading study data:", error);
-      } finally {
-        setIsLoadingTime(false);
-      }
+  const formatTime = (seconds) => {
+    const hrs = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+    
+    return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const addStudySession = (duration, pointsEarned) => {
+    const newSession = {
+      date: new Date(),
+      duration,
+      pointsEarned
     };
-    
-    if (user && groupId) {
-      loadStudyData();
-    }
-  }, [user, groupId]);
-
-  // استماع مباشر للتغيرات في النقاط ووقت الدراسة من Firebase
-  useEffect(() => {
-    if (!user || !groupId) return;
-    
-    // الاستماع لتحديثات النقاط في Firebase
-    const unsubscribePoints = onSnapshot(doc(db, "users", user.uid), (doc) => {
-      if (doc.exists()) {
-        const userData = doc.data();
-        setPoints(userData.points || 0);
-        setTotalStudyTime(userData.totalStudyTime || 0);
-      }
-    });
-    
-    // الاستماع لتحديثات المجموعة
-    const unsubscribeGroup = onSnapshot(doc(db, "studyGroups", groupId), (doc) => {
-      if (doc.exists()) {
-        const groupData = doc.data();
-        const userPoints = groupData.userPoints?.[user.uid] || 0;
-        setPoints(userPoints);
-      }
-    });
-    
-    return () => {
-      unsubscribePoints();
-      unsubscribeGroup();
-    };
-  }, [user, groupId]);
-
-  const startNewSession = async () => {
-    try {
-      const sessionId = await studyTimeService.startStudySession(user.uid, groupId);
-      setCurrentSessionId(sessionId);
-      setIsRunning(true);
-      setSessionTime(0);
-    } catch (error) {
-      console.error("Error starting session:", error);
-      showNotification("حدث خطأ في بدء الجلسة");
-    }
+    setStudySessions(prev => [newSession, ...prev].slice(0, 10));
   };
 
-  // تم إصلاح هذه الدالة لمنع مضاعفة النقاط
-  const stopAndSaveSession = async () => {
-    if (!currentSessionId || sessionTime === 0) return;
-    
+  const updatePoints = async (newPoints) => {
     try {
-      // إيقاف تحديث النقاط التلقائي أولاً
-      setIsRunning(false);
-      
-      const result = await studyTimeService.endStudySession(currentSessionId, sessionTime);
-      
-      if (result.success) {
-        const pointsEarned = result.pointsEarned;
-        
-        // تحديث الإجمالي محليًا
-        const newTotal = totalStudyTime + sessionTime;
-        setTotalStudyTime(newTotal);
-        
-        // تحديث النقاط (بدون مضاعفة)
-        const newPoints = points + pointsEarned;
-        setPoints(newPoints);
-        
-        // تحديث جلسات الدراسة
-        const recentSessions = await studyTimeService.getUserRecentSessions(user.uid, 10);
-        setStudySessions(recentSessions);
-        
-        // تحديث الإحصائيات
-        const stats = await studyTimeService.getUserStudyStats(user.uid);
-        setStudyStats(stats);
-        
-        setCurrentSessionId(null);
-        showNotification(`تم حفظ ${formatTimeDetailed(sessionTime)} من الدراسة (+${pointsEarned} نقطة)`);
-      }
-    } catch (error) {
-      console.error("Error stopping session:", error);
-      showNotification("حدث خطأ في حفظ الجلسة");
-      // إعادة التشغيل إذا فشل الحفظ
-      setIsRunning(true);
-    }
-  };
-
-  // تحديث الجلسة النشطة في Firebase كل دقيقة
-  useEffect(() => {
-    let interval;
-    
-    if (isRunning && currentSessionId) {
-      interval = setInterval(async () => {
-        setSessionTime(prev => {
-          const newTime = prev + 1;
-          
-          // تحديث الوقت في Firebase كل دقيقة لتقليل القراءات
-          if (newTime % 60 === 0) {
-            studyTimeService.updateActiveSession(currentSessionId, newTime);
-          }
-          
-          return newTime;
+      const groupDoc = await getDoc(doc(db, "studyGroups", groupId));
+      if (groupDoc.exists() && !groupDoc.data().bannedMembers?.includes(user.uid)) {
+        await updateDoc(doc(db, "studyGroups", groupId), {
+          [`userPoints.${user.uid}`]: newPoints
         });
-      }, 1000);
-    }
-    
-    return () => clearInterval(interval);
-  }, [isRunning, currentSessionId]);
-
-  // إزالة المضاعفة - فقط تحديث للتأثيرات البصرية
-  useEffect(() => {
-    if (isRunning && sessionTime > 0 && sessionTime % 30 === 0 && sessionTime !== lastUpdateTime) {
-      // فقط تحديث الـ UI للتأثيرات
-      if (activeEffects.some(e => e.type === 'double_points')) {
-        setLastUpdateTime(sessionTime);
       }
-    }
-  }, [sessionTime, isRunning, activeEffects]);
-
-  const toggleTimer = async () => {
-    if (isRunning) {
-      // إيقاف وحفظ الجلسة
-      await stopAndSaveSession();
-    } else {
-      // بدء جلسة جديدة
-      await startNewSession();
+    } catch (error) {
+      console.error("Error updating points:", error);
     }
   };
 
@@ -1089,6 +667,38 @@ function Timer({ user, onBack, groupId }) {
     const unsubscribe = onSnapshot(doc(db, "studyGroups", groupId), fetchGroupData);
     return () => unsubscribe();
   }, [groupId, user.uid]);
+
+  useEffect(() => {
+    let interval;
+    if (isRunning) {
+      interval = setInterval(() => {
+        setTime(prev => {
+          const newTime = prev + 1;
+          if (newTime % 30 === 0) {
+            const pointsEarned = activeEffects.some(e => e.type === 'double_points') ? 2 : 1;
+            setPoints(prevPoints => prevPoints + pointsEarned);
+            addStudySession(newTime, pointsEarned);
+          }
+          return newTime;
+        });
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [isRunning, activeEffects]);
+
+  useEffect(() => {
+    if (isRunning && time > 0 && time % 30 === 0 && time !== lastUpdateTime) {
+      const newPoints = points + (activeEffects.some(e => e.type === 'double_points') ? 2 : 1);
+      setPoints(newPoints);
+      updatePoints(newPoints);
+      setLastUpdateTime(time);
+      
+      const newLevelData = calculateLevel(newPoints);
+      if (newLevelData.currentLevel > currentLevel) {
+        showNotification(`🎉 تقدمت للمستوى ${newLevelData.currentLevel}!`);
+      }
+    }
+  }, [time, isRunning]);
 
   useEffect(() => {
     const handleVisibilityChange = () => {
@@ -1179,17 +789,10 @@ function Timer({ user, onBack, groupId }) {
     }
   };
 
-  const resetTimer = async () => {
-    if (isRunning && currentSessionId) {
-      if (window.confirm("هل تريد إيقاف وحفظ الجلسة الحالية قبل الإعادة؟")) {
-        await stopAndSaveSession();
-      } else {
-        setIsRunning(false);
-        setCurrentSessionId(null);
-      }
-    }
-    
-    setSessionTime(0);
+  const resetTimer = () => {
+    setIsRunning(false);
+    setTime(0);
+    showNotification("⏱ تم إعادة ضبط المؤقت");
   };
 
   const toggleMembersSidebar = () => {
@@ -1206,16 +809,6 @@ function Timer({ user, onBack, groupId }) {
 
     return () => clearInterval(interval);
   }, [members]);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setActiveEffects(prev => 
-        prev.filter(effect => effect.expires > Date.now())
-      );
-    }, 60000);
-
-    return () => clearInterval(interval);
-  }, []);
 
   const handleActivateExam = async (exam) => {
     setExamLoading(true);
@@ -1409,24 +1002,6 @@ function Timer({ user, onBack, groupId }) {
         </div>
         
         <div className="menu-section">
-          <h3>إحصائيات الدراسة</h3>
-          <div className="stats-summary">
-            <div className="stat-item">
-              <span className="stat-label">إجمالي الوقت:</span>
-              <span className="stat-value">{formatTimeDetailed(totalStudyTime)}</span>
-            </div>
-            <div className="stat-item">
-              <span className="stat-label">عدد الجلسات:</span>
-              <span className="stat-value">{studyStats.sessionCount}</span>
-            </div>
-            <div className="stat-item">
-              <span className="stat-label">وقت اليوم:</span>
-              <span className="stat-value">{formatTimeDetailed(studyStats.todayDuration)}</span>
-            </div>
-          </div>
-        </div>
-        
-        <div className="menu-section">
           <h3>الإعدادات</h3>
           <div className="settings-option">
             <span>الوضع المظلم:</span>
@@ -1463,103 +1038,85 @@ function Timer({ user, onBack, groupId }) {
       <div className="main-content">
         {activeTab === 'timer' && (
           <div className="timer-container">
-            {isLoadingTime ? (
-              <div className="loading-overlay">
-                <div className="spinner"></div>
-                <p>جاري تحميل بيانات الدراسة...</p>
+            <div className="time-display">
+              <h2>وقت المذاكرة</h2>
+              <div className="time">{formatTime(time)}</div>
+            </div>
+            
+            <div className="stats-display">
+              <div className="stat-box">
+                <span className="stat-label">النقاط</span>
+                <span className="stat-value">{points}</span>
               </div>
-            ) : (
-              <>
-                <div className="time-display">
-                  <h2>وقت المذاكرة</h2>
-                  <div className="time">{formatTime(sessionTime)}</div>
-                  <div className="total-time-display">
-                    <span className="total-time-label">إجمالي وقت الدراسة:</span>
-                    <span className="total-time-value">{formatTimeDetailed(totalStudyTime)}</span>
-                  </div>
-                </div>
-                
-                <div className="stats-display">
-                  <div className="stat-box">
-                    <span className="stat-label">النقاط</span>
-                    <span className="stat-value">{points}</span>
-                  </div>
-                  
-                  <div className="stat-box">
-                    <span className="stat-label">المستوى</span>
-                    <span className="stat-value">{currentLevel}</span>
-                  </div>
-                  
-                  <div className="stat-box">
-                    <span className="stat-label">الجلسات</span>
-                    <span className="stat-value">{studyStats.sessionCount}</span>
-                  </div>
-                </div>
-                
-                <div className="progress-container">
-                  <div className="progress-label">
-                    <span>التقدم للمستوى {currentLevel + 1}</span>
-                    <span>{Math.round(progress)}%</span>
-                  </div>
-                  <div className="progress-bar">
-                    <div 
-                      className="progress-fill"
-                      style={{ width: `${progress}%` }}
-                    ></div>
-                  </div>
-                  <div className="progress-text">
-                    {pointsToNextLevel} نقطة متبقية للوصول للمستوى التالي
-                  </div>
-                </div>
-                
-                <div className="timer-controls">
-                  <button 
-                    onClick={toggleTimer}
-                    className={`control-button ${isRunning ? 'pause-button' : 'start-button'}`}
-                    disabled={bannedMembers.includes(user.uid)}
-                  >
-                    {isRunning ? '⏸️ إيقاف' : '▶️ بدء'}
-                  </button>
-                  
-                  <button 
-                    onClick={resetTimer}
-                    className="control-button reset-button"
-                  >
-                    🔄 إعادة تعيين
-                  </button>
-                  
-                  <button
-                    onClick={toggleMembersSidebar}
-                    className="control-button members-button"
-                  >
-                    {showMembers ? '👥 إخفاء الأعضاء' : '👥 عرض الأعضاء'}
-                  </button>
-                </div>
+              
+              <div className="stat-box">
+                <span className="stat-label">المستوى</span>
+                <span className="stat-value">{currentLevel}</span>
+              </div>
+            </div>
+            
+            <div className="progress-container">
+              <div className="progress-label">
+                <span>التقدم للمستوى {currentLevel + 1}</span>
+                <span>{Math.round(progress)}%</span>
+              </div>
+              <div className="progress-bar">
+                <div 
+                  className="progress-fill"
+                  style={{ width: `${progress}%` }}
+                ></div>
+              </div>
+              <div className="progress-text">
+                {pointsToNextLevel} نقطة متبقية للوصول للمستوى التالي
+              </div>
+            </div>
+            
+            <div className="timer-controls">
+              <button 
+                onClick={() => setIsRunning(!isRunning)}
+                className={`control-button ${isRunning ? 'pause-button' : 'start-button'}`}
+                disabled={bannedMembers.includes(user.uid)}
+              >
+                {isRunning ? ' إيقاف' : ' بدء'}
+              </button>
+              
+              <button 
+                onClick={resetTimer}
+                className="control-button reset-button"
+              >
+                 إعادة تعيين
+              </button>
+              
+              <button
+                onClick={toggleMembersSidebar}
+                className="control-button members-button"
+              >
+                {showMembers ? ' إخفاء الأعضاء' : ' عرض الأعضاء'}
+              </button>
+            </div>
 
-                {activeEffects.length > 0 && (
-                  <div className="active-effects">
-                    <h3>التأثيرات النشطة</h3>
-                    <div className="effects-list">
-                      {activeEffects.map((effect, index) => {
-                        const item = shopItems.find(i => i.id === effect.itemId);
-                        if (!item) return null;
-                        
-                        return (
-                          <div key={index} className="active-effect">
-                            <span className="effect-icon" style={{ color: item.color }}>
-                              {item.icon}
-                            </span>
-                            <span className="effect-name">{item.name}</span>
-                            <span className="effect-time">
-                              {Math.ceil((effect.expires - Date.now()) / (60 * 1000))} دقائق متبقية
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-              </>
+            {activeEffects.length > 0 && (
+              <div className="active-effects">
+                <h3>التأثيرات النشطة</h3>
+                <div className="effects-list">
+                  {activeEffects.map((effect, index) => {
+                    const item = shopItems.find(i => i.id === effect.itemId);
+                    if (!item) return null;
+                    
+                    return (
+                      <div key={index} className="active-effect">
+                        <span className="effect-icon" style={{ color: item.color }}>
+                          {item.icon}
+                        </span>
+                        <span className="effect-name">{item.name}</span>
+                        <span className="effect-time">
+                          {Math.ceil((effect.expires - Date.now()) / (60 * 1000))} دقائق متبقية
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
             )}
           </div>
         )}
@@ -1574,106 +1131,40 @@ function Timer({ user, onBack, groupId }) {
               />
               <h2>{user.displayName}</h2>
               <p className="user-level">المستوى {currentLevel}</p>
-              <div 
-                className="profile-badge"
-                style={{ 
-                  backgroundColor: currentBadge.bgColor,
-                  color: currentBadge.color,
-                  borderColor: currentBadge.color
-                }}
-              >
-                {currentBadge.icon} {currentBadge.name}
-              </div>
             </div>
             
             <div className="profile-stats">
-              <h3>إحصائيات الدراسة</h3>
-              <div className="stats-grid">
-                <div className="stat-card">
-                  <div className="stat-icon">⏱️</div>
-                  <div className="stat-content">
-                    <span className="stat-label">إجمالي وقت الدراسة</span>
-                    <span className="stat-value">{formatTimeDetailed(totalStudyTime)}</span>
-                  </div>
-                </div>
-                
-                <div className="stat-card">
-                  <div className="stat-icon">📊</div>
-                  <div className="stat-content">
-                    <span className="stat-label">عدد الجلسات</span>
-                    <span className="stat-value">{studyStats.sessionCount}</span>
-                  </div>
-                </div>
-                
-                <div className="stat-card">
-                  <div className="stat-icon">⭐</div>
-                  <div className="stat-content">
-                    <span className="stat-label">إجمالي النقاط</span>
-                    <span className="stat-value">{points}</span>
-                  </div>
-                </div>
-                
-                <div className="stat-card">
-                  <div className="stat-icon">📈</div>
-                  <div className="stat-content">
-                    <span className="stat-label">متوسط وقت الجلسة</span>
-                    <span className="stat-value">{formatTimeDetailed(studyStats.averageDuration)}</span>
-                  </div>
-                </div>
-                
-                <div className="stat-card">
-                  <div className="stat-icon">🎯</div>
-                  <div className="stat-content">
-                    <span className="stat-label">النقاط المتبقية</span>
-                    <span className="stat-value">{pointsToNextLevel}</span>
-                  </div>
-                </div>
-                
-                <div className="stat-card">
-                  <div className="stat-icon">📅</div>
-                  <div className="stat-content">
-                    <span className="stat-label">وقت الدراسة اليوم</span>
-                    <span className="stat-value">{formatTimeDetailed(studyStats.todayDuration)}</span>
-                  </div>
-                </div>
+              <div className="stat-row">
+                <span className="stat-label">إجمالي النقاط:</span>
+                <span className="stat-value">{points}</span>
+              </div>
+              
+              <div className="stat-row">
+                <span className="stat-label">إجمالي وقت الدراسة:</span>
+                <span className="stat-value">{Math.floor(time / 3600)} ساعة</span>
+              </div>
+              
+              <div className="stat-row">
+                <span className="stat-label">النقاط للوصول للمستوى التالي:</span>
+                <span className="stat-value">{pointsToNextLevel}</span>
               </div>
             </div>
             
             {studySessions.length > 0 && (
               <div className="sessions-history">
-                <h3>سجل جلسات الدراسة</h3>
+                <h3>آخر جلسات الدراسة</h3>
                 <div className="sessions-list">
                   {studySessions.map((session, index) => (
-                    <div key={session.id || index} className="session-item">
-                      <div className="session-header">
-                        <span className="session-date">
-                          {session.endTime ? 
-                            new Date(session.endTime).toLocaleDateString('ar-SA', {
-                              year: 'numeric',
-                              month: 'long',
-                              day: 'numeric'
-                            }) :
-                            'جلسة نشطة'
-                          }
-                        </span>
-                        <span className="session-time">
-                          {session.endTime ? 
-                            new Date(session.endTime).toLocaleTimeString('ar-SA', {
-                              hour: '2-digit',
-                              minute: '2-digit'
-                            }) :
-                            'قيد التشغيل'
-                          }
-                        </span>
-                      </div>
-                      <div className="session-details">
-                        <span className="session-duration">
-                          ⏱️ {formatTimeDetailed(session.duration || 0)}
-                        </span>
-                        <span className="session-points">
-                          ⭐ +{session.pointsEarned || 0} نقطة
-                        </span>
-                      </div>
+                    <div key={index} className="session-item">
+                      <span className="session-date">
+                        {new Date(session.date).toLocaleDateString()}
+                      </span>
+                      <span className="session-duration">
+                        {formatTime(session.duration)}
+                      </span>
+                      <span className="session-points">
+                        +{session.pointsEarned} نقطة
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -1968,25 +1459,12 @@ function App() {
       if (currentUser) {
         const userData = await userService.createOrUpdateUser(currentUser);
         if (userData) {
-          const fullUserData = await userService.loadUserStudyData(currentUser.uid);
-          
-          if (fullUserData) {
-            setUser({
-              ...currentUser,
-              uniqueCode: userData.uniqueCode,
-              hasVerifiedCode: userData.hasVerifiedCode || false,
-              totalStudyTime: fullUserData.totalStudyTime || 0,
-              studyStats: fullUserData.studyStats
-            });
-            setCodeVerified(userData.hasVerifiedCode || false);
-          } else {
-            setUser({
-              ...currentUser,
-              uniqueCode: userData.uniqueCode,
-              hasVerifiedCode: userData.hasVerifiedCode || false,
-              totalStudyTime: 0
-            });
-          }
+          setUser({
+            ...currentUser,
+            uniqueCode: userData.uniqueCode,
+            hasVerifiedCode: userData.hasVerifiedCode || false
+          });
+          setCodeVerified(userData.hasVerifiedCode || false);
         }
         await fetchUserGroups(currentUser.uid);
       } else {
@@ -2050,19 +1528,17 @@ function App() {
       const userData = await userService.createOrUpdateUser(result.user);
       
       if (userData) {
-        const fullUserData = await userService.loadUserStudyData(result.user.uid);
-        
         setUser({
           ...result.user,
           uniqueCode: userData.uniqueCode,
-          hasVerifiedCode: userData.hasVerifiedCode || false,
-          totalStudyTime: fullUserData?.totalStudyTime || 0,
-          studyStats: fullUserData?.studyStats
+          hasVerifiedCode: userData.hasVerifiedCode || false
         });
         
+        // إنشاء كود التحقق للمستخدم
         const codeResult = await userService.createUserCode(result.user.uid);
         console.log('User code:', codeResult.code);
         
+        // التحقق من حالة التحقق للمستخدم
         const isVerified = await userService.checkCodeVerification(result.user.uid);
         if (isVerified) {
           setCodeVerified(true);
@@ -2098,8 +1574,7 @@ function App() {
         creator: user.uid,
         members: [user.uid],
         userPoints: { [user.uid]: 0 },
-        bannedMembers: [],
-        totalStudyTime: user?.totalStudyTime || 0
+        bannedMembers: []
       };
       
       await addDoc(collection(db, "studyGroups"), newGroup);
@@ -2214,8 +1689,10 @@ function App() {
         setJoinCode('');
         showNotification('تم التحقق بنجاح!');
         
+        // تمكين الميزات الإضافية للمستخدم
         enablePremiumFeatures(user.uid);
         
+        // الحصول على معلومات الكود
         const codeInfo = await userService.getCodeInfo(user.uid);
         console.log('Code info:', codeInfo);
       } else {
@@ -2235,11 +1712,12 @@ function App() {
     if (remainingAttempts <= 0) {
       setShowCodeModal(false);
       showNotification('لقد استنفذت جميع محاولات التحقق. يرجى المحاولة لاحقاً');
-      setCodeAttempts(3);
+      setCodeAttempts(3); // إعادة تعيين المحاولات
     }
   };
 
   const enablePremiumFeatures = (userId) => {
+    // هنا يمكنك إضافة أي منطق لتمكين الميزات المميزة للمستخدم
     console.log(`تم تمكين الميزات المميزة للمستخدم ${userId}`);
   };
 
@@ -2284,18 +1762,6 @@ function App() {
                       <img src={user.photoURL} alt="صورة المستخدم" className="user-avatar" />
                       <div className="user-details">
                         <h2>مرحباً {user.displayName}!</h2>
-                        <div className="study-summary">
-                          <span className="study-time">
-                            ⏱️ إجمالي وقت الدراسة: {user.totalStudyTime ? 
-                              (() => {
-                                const hrs = Math.floor(user.totalStudyTime / 3600);
-                                const mins = Math.floor((user.totalStudyTime % 3600) / 60);
-                                return `${hrs} ساعة ${mins} دقيقة`;
-                              })() : 
-                              '0 ساعة'
-                            }
-                          </span>
-                        </div>
                         <div className="user-actions">
                           <button 
                             className={`profile-button ${activeTab === 'profile' ? 'active' : ''}`}
